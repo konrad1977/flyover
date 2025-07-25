@@ -808,20 +808,19 @@ Returns a list of strings, each representing a line."
           (message "Error levels: %S"
                    (mapcar #'flycheck-error-level sorted-errors)))
 
-        (when filtered-errors
-          (flyover--clear-overlays)
-          ;; Reverse the list to maintain correct display order
-          (setq flyover--overlays
-                (cl-loop for err in filtered-errors
-                         when (flycheck-error-p err)
-                         for level = (flycheck-error-level err)
-                         for msg = (flycheck-error-message err)
-                         for cleaned-msg = (and msg (flyover--remove-checker-name msg))
-                         for region = (and cleaned-msg (flyover--get-error-region err))
-                         for overlay = (and region (flyover--create-overlay
-                                                    region level cleaned-msg err))
-                         when overlay
-                         collect overlay))))
+        (flyover--clear-overlays)
+        ;; Reverse the list to maintain correct display order
+        (setq flyover--overlays
+              (cl-loop for err in filtered-errors
+                       when (flycheck-error-p err)
+                       for level = (flycheck-error-level err)
+                       for msg = (flycheck-error-message err)
+                       for cleaned-msg = (and msg (flyover--remove-checker-name msg))
+                       for region = (and cleaned-msg (flyover--get-error-region err))
+                       for overlay = (and region (flyover--create-overlay
+                                                  region level cleaned-msg err))
+                       when overlay
+                         collect overlay)))
     (error
      (when flyover-debug
        (message "Debug: Display error: %S" display-err)))))
