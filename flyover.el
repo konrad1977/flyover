@@ -2,7 +2,7 @@
 
 ;; Author: Mikael Konradsson <mikael.konradsson@outlook.com>
 ;; Version: 0.8.5
-;; Package-Requires: ((emacs "27.1") (flymake "1.0"))
+;; Package-Requires: ((emacs "27.1") (flymake "1.0") (cl-lib "0.5"))
 ;; Keywords: convenience, tools, flycheck, flymake
 ;; URL: https://github.com/konrad1977/flyover
 ;; SPDX-License-Identifier: MIT
@@ -22,6 +22,15 @@
 
 (require 'flymake)
 (require 'cl-lib)
+
+;; Flycheck-independent error structure
+(cl-defstruct flyover-error
+  "Error structure for flyover that works independently of flycheck."
+  line column level message checker)
+
+(defun flyover--create-error (line column level message &optional checker)
+  "Create a flyover error object."
+  (make-flyover-error :line line :column column :level level :message message :checker checker))
 
 ;; Optional flycheck support
 (defun flyover--ensure-flycheck ()
@@ -332,7 +341,7 @@ CONTEXT provides operation context, and OPERATION is optional operation name."
     (flymake-diagnostics)))
 
 (defun flyover--convert-flymake-diagnostic (diag)
-  "Convert a Flymake DIAG to Flycheck error format.
+  "Convert a Flymake DIAG to flyover error format.
 Only converts diagnostics whose level is in `flyover-levels'."
   (let* ((beg (flymake-diagnostic-beg diag))
          (type (flymake-diagnostic-type diag))
@@ -340,13 +349,14 @@ Only converts diagnostics whose level is in `flyover-levels'."
          (level (flyover--flymake-type-to-level type)))
     ;; Only convert if the level is enabled
     (when (memq level flyover-levels)
-      (flycheck-error-new-at
+      (flyover--create-error
        (line-number-at-pos beg)
        (save-excursion
          (goto-char beg)
          (current-column))
        level
-       text))))
+       text
+       'flymake))))
 
 (defun flyover--flymake-type-to-level (type)
   "Convert Flymake diagnostic TYPE to Flycheck level.
@@ -375,11 +385,25 @@ Handles various forms that Flymake types can take."
      ;; Default fallback
      (t 'warning))))
 
+(defun flyover--convert-flycheck-error (err)
+  "Convert a flycheck error to flyover error format."
+  (when (and (featurep 'flycheck) (flycheck-error-p err))
+    (flyover--create-error
+     (flycheck-error-line err)
+     (flycheck-error-column err)
+     (flycheck-error-level err)
+     (flycheck-error-message err)
+     'flycheck)))
+
 (defun flyover--get-all-errors ()
   "Get all errors from enabled checkers."
   (let (all-errors)
-    (when (memq 'flycheck flyover-checkers)
-      (setq all-errors (append all-errors flycheck-current-errors)))
+    (when (and (memq 'flycheck flyover-checkers)
+               (featurep 'flycheck)
+               (boundp 'flycheck-current-errors))
+      (setq all-errors (append all-errors
+                              (delq nil (mapcar #'flyover--convert-flycheck-error
+                                               flycheck-current-errors)))))
     (when (memq 'flymake flyover-checkers)
       (let ((flymake-diagnostics (flyover--get-flymake-diagnostics)))
         (when flymake-diagnostics
@@ -402,22 +426,22 @@ Handles various forms that Flymake types can take."
           (message "Type: %S (class: %s)" type (type-of type)))))))
 (defun flyover--error-position-< (err1 err2)
   "Compare two errors ERR1 and ERR2 by position."
-  (let ((line1 (flycheck-error-line err1))
-        (line2 (flycheck-error-line err2))
-        (col1 (flycheck-error-column err1))
-        (col2 (flycheck-error-column err2)))
+  (let ((line1 (flyover-error-line err1))
+        (line2 (flyover-error-line err2))
+        (col1 (flyover-error-column err1))
+        (col2 (flyover-error-column err2)))
     (or (< line1 line2)
         (and (= line1 line2)
              (< (or col1 0) (or col2 0))))))
 
 (defun flyover--is-valid-error (err)
-  "Check if ERR is a valid flycheck error with proper positioning."
+  "Check if ERR is a valid flyover error with proper positioning."
   (and err
        (not (eq err t))
-       (flycheck-error-p err)
-       (let ((line (flycheck-error-line err))
-             (column (flycheck-error-column err))
-             (level (flycheck-error-level err)))
+       (flyover-error-p err)
+       (let ((line (flyover-error-line err))
+             (column (flyover-error-column err))
+             (level (flyover-error-level err)))
          (and (numberp line)
               (>= line 0)
               (or (not column)
@@ -442,7 +466,7 @@ This function ensures all errors are valid and have proper positions."
       (save-excursion
         (save-restriction
           (widen)
-          (let* ((line (flycheck-error-line err))
+          (let* ((line (flyover-error-line err))
                  (start-pos (progn
                               (goto-char (point-min))
                               (forward-line (1- line))  ; line is 1-based
@@ -465,7 +489,7 @@ This function ensures all errors are valid and have proper positions."
   "Create an overlay at REGION with LEVEL and message MSG.
 REGION should be a cons cell (BEG . END) of buffer positions.
 LEVEL is the error level (error, warning, or info).
-ERROR is the optional original flycheck error object."
+ERROR is the optional original flyover error object."
   (let ((overlay nil))
     (condition-case ov-err
         (let* ((beg (car region))
@@ -551,9 +575,9 @@ ERROR is the optional original flycheck error object."
 
 (defun flyover--calculate-overlay-priority (error)
   "Calculate overlay priority based on ERROR level and column position."
-  (let* ((col-pos (when (flycheck-error-p error)
-                    (or (flycheck-error-column error) 0)))
-         (level-priority (pcase (flycheck-error-level error)
+  (let* ((col-pos (when (flyover-error-p error)
+                    (or (flyover-error-column error) 0)))
+         (level-priority (pcase (flyover-error-level error)
                            ('error flyover--error-priority)
                            ('warning flyover--warning-priority)
                            ('info flyover--info-priority)
@@ -567,14 +591,14 @@ ERROR is the optional original flycheck error object."
   (overlay-put overlay 'modification-hooks
                '(flyover--clear-overlay-on-modification))
   (overlay-put overlay 'priority (flyover--calculate-overlay-priority error))
-  (when (flycheck-error-p error)
-    (overlay-put overlay 'flycheck-error error)))
+  (when (flyover-error-p error)
+    (overlay-put overlay 'flyover-error error)))
 
 (defun flyover--create-overlay-display-components (face error msg)
   "Create display components for overlay with FACE, ERROR, and MSG.
 Returns a plist with :fg-color, :bg-color, :tinted-fg, :face-with-colors,
 :indicator, :virtual-line, and :marked-string."
-  (let* ((colors (flyover--get-face-colors (flycheck-error-level error)))
+  (let* ((colors (flyover--get-face-colors (flyover-error-level error)))
          (fg-color (car colors))
          (bg-color (cdr colors))
          (tinted-fg (if flyover-text-tint
@@ -609,8 +633,8 @@ Returns a plist with :fg-color, :bg-color, :tinted-fg, :face-with-colors,
 
 (defun flyover--build-final-overlay-string (components error msg)
   "Build the final overlay string from display COMPONENTS, ERROR, and MSG."
-  (let* ((col-pos (when (flycheck-error-p error)
-                    (or (flycheck-error-column error) 0)))
+  (let* ((col-pos (when (flyover-error-p error)
+                    (or (flyover-error-column error) 0)))
          (line-content (string-trim
                         (buffer-substring-no-properties
                          (line-beginning-position)
@@ -795,27 +819,27 @@ Returns a list of strings, each representing a line."
                               (when flyover-debug
                                 (message "Before sorting: %S"
                                          (mapcar (lambda (err)
-                                                   (cons (flycheck-error-line err)
-                                                         (flycheck-error-column err)))
+                                                   (cons (flyover-error-line err)
+                                                         (flyover-error-column err)))
                                                  filtered-errors)))
                               (sort filtered-errors #'flyover--error-position-<))))
         (when flyover-debug
           (message "After sorting: %S"
                    (mapcar (lambda (err)
-                             (cons (flycheck-error-line err)
-                                   (flycheck-error-column err)))
+                             (cons (flyover-error-line err)
+                                   (flyover-error-column err)))
                            sorted-errors))
           (message "Error levels: %S"
-                   (mapcar #'flycheck-error-level sorted-errors)))
+                   (mapcar #'flyover-error-level sorted-errors)))
 
         (when filtered-errors
           (flyover--clear-overlays)
           ;; Reverse the list to maintain correct display order
           (setq flyover--overlays
                 (cl-loop for err in filtered-errors
-                         when (flycheck-error-p err)
-                         for level = (flycheck-error-level err)
-                         for msg = (flycheck-error-message err)
+                         when (flyover-error-p err)
+                         for level = (flyover-error-level err)
+                         for msg = (flyover-error-message err)
                          for cleaned-msg = (and msg (flyover--remove-checker-name msg))
                          for region = (and cleaned-msg (flyover--get-error-region err))
                          for overlay = (and region (flyover--create-overlay
@@ -902,8 +926,10 @@ Returns a list of strings, each representing a line."
 
 (defun flyover--disable ()
   "Disable Flycheck/Flymake overlay mode."
-  (flyover--safe-remove-hook 'flycheck-after-syntax-check-hook
-                                      #'flyover--maybe-display-errors-debounced)
+  (when (and (featurep 'flycheck) 
+             (boundp 'flycheck-after-syntax-check-hook))
+    (flyover--safe-remove-hook 'flycheck-after-syntax-check-hook
+                                        #'flyover--maybe-display-errors-debounced))
   (when (memq 'flymake flyover-checkers)
     (flyover--disable-flymake-hooks))
   
@@ -924,11 +950,9 @@ Returns a list of strings, each representing a line."
           (when flyover-hide-when-cursor-is-on-same-line
             (push ov to-delete))
           (when (and flyover-hide-when-cursor-is-at-same-line
-                     (overlay-get ov 'flycheck-error)
-                     (let ((error (overlay-get ov 'flycheck-error)))
-                       (= (if (featurep 'flycheck)
-                              (flycheck-error-column error)
-                            (plist-get error :column))
+                     (overlay-get ov 'flyover-error)
+                     (let ((error (overlay-get ov 'flyover-error)))
+                       (= (flyover-error-column error)
                           current-col)))
             (push ov to-delete))))
       ;; Delete collected overlays

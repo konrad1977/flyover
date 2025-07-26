@@ -8,7 +8,7 @@
     <img src="https://github.com/konrad1977/flycheck-overlay/blob/main/screenshots/flyover_logo.png" alt="Flyover logo" height="300" width="300">
 </picture>
 
-A modern, aesthetic overlay display for *Flycheck* and *Flymake* in Emacs. Flyover is a full featured package with tons of features for you to customize. 
+A modern, aesthetic overlay display for *Flycheck* and *Flymake* in Emacs. Flyover is a full featured package with tons of features for you to customize. **Works independently with either Flycheck or Flymake** - no need to install both! 
 
 ## Features
 
@@ -42,8 +42,13 @@ A modern, aesthetic overlay display for *Flycheck* and *Flymake* in Emacs. Flyov
 ### Basic Setup
 
 ```elisp
-;; Enable flyover-mode globally
+;; Enable flyover-mode globally for both Flycheck and Flymake
 (add-hook 'flycheck-mode-hook #'flyover-mode)
+(add-hook 'flymake-mode-hook #'flyover-mode)
+
+;; Or enable for just one checker
+;; (add-hook 'flymake-mode-hook #'flyover-mode)  ; Flymake only
+;; (add-hook 'flycheck-mode-hook #'flyover-mode) ; Flycheck only
 
 ;; Configure which error levels to display
 ;; Possible values: error, warning, info
@@ -110,7 +115,9 @@ Once enabled, `flyover` will automatically display error messages as overlays be
 
 ```elisp
 ;; Choose which checkers to use (flycheck, flymake, or both)
-(setq flyover-checkers '(flycheck flymake))
+(setq flyover-checkers '(flycheck flymake))  ; Use both (default)
+;; (setq flyover-checkers '(flymake))        ; Use only Flymake
+;; (setq flyover-checkers '(flycheck))       ; Use only Flycheck
 
 ;; Enable debug messages
 (setq flyover-debug nil)
@@ -237,6 +244,12 @@ The package includes comprehensive tests for the message wrapping functionality:
 ```bash
 # Run core wrapping tests (no dependencies required)
 emacs -batch -l test-wrapping.el
+
+# Test Flymake-only functionality (no Flycheck required)
+emacs -batch -l test-flymake-only.el
+
+# Test Flymake integration
+emacs -batch -l test-flymake-integration.el
 
 # Run full test suite (requires flycheck)
 emacs -batch -l flyover.el -l flycheck-overlay-test.el -f ert-run-tests-batch-and-exit
