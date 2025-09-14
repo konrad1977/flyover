@@ -1,7 +1,7 @@
 ;;; flyover.el --- Display Flycheck and Flymake errors with overlays -*- lexical-binding: t -*-
 
 ;; Author: Mikael Konradsson <mikael.konradsson@outlook.com>
-;; Version: 0.8.5
+;; Version: 0.8.7
 ;; Package-Requires: ((emacs "27.1") (flymake "1.0"))
 ;; Keywords: convenience, tools, flycheck, flymake
 ;; URL: https://github.com/konrad1977/flyover
@@ -23,16 +23,18 @@
 (require 'flymake)
 (require 'cl-lib)
 
-;; Optional flycheck support
-(defun flyover--ensure-flycheck ()
-  "Ensure flycheck is available if needed."
-  (when (and (memq 'flycheck flyover-checkers)
-             (not (featurep 'flycheck)))
-    (condition-case nil
-        (require 'flycheck)
-      (error
-       (message "Flycheck not available, removing from flyover-checkers")
-       (setq flyover-checkers (delq 'flycheck flyover-checkers))))))
+;; Declare flycheck functions to avoid byte-compilation warnings
+(declare-function flycheck-error-new-at "flycheck")
+(declare-function flycheck-error-p "flycheck")
+(declare-function flycheck-error-line "flycheck")
+(declare-function flycheck-error-column "flycheck")
+(declare-function flycheck-error-level "flycheck")
+(declare-function flycheck-error-message "flycheck")
+(declare-function flycheck-error-checker "flycheck")
+
+;; Declare flycheck variables
+(defvar flycheck-current-errors)
+(defvar flycheck-checkers)
 
 (defgroup flyover nil
   "Display Flycheck/Flymake errors using overlays."
@@ -50,6 +52,17 @@ Supported values are `flycheck` and `flymake`."
   :type '(set (const :tag "Flycheck" flycheck)
               (const :tag "Flymake" flymake))
   :group 'flyover)
+
+;; Optional flycheck support
+(defun flyover--ensure-flycheck ()
+  "Ensure flycheck is available if needed."
+  (when (and (memq 'flycheck flyover-checkers)
+             (not (featurep 'flycheck)))
+    (condition-case nil
+        (require 'flycheck)
+      (error
+       (message "Flycheck not available, removing from flyover-checkers")
+       (setq flyover-checkers (delq 'flycheck flyover-checkers))))))
 
 (defcustom flyover-levels '(error warning info)
   "Error levels to display overlays for.
@@ -351,6 +364,7 @@ Only converts diagnostics whose level is in `flyover-levels'."
 (defun flyover--flymake-type-to-level (type)
   "Convert Flymake diagnostic TYPE to Flycheck level.
 Handles various forms that Flymake types can take."
+  (message type)
   (let ((type-str (cond
                    ((symbolp type) (symbol-name type))
                    ((stringp type) type)
@@ -400,6 +414,7 @@ Handles various forms that Flymake types can take."
       (dolist (diag diagnostics)
         (let ((type (flymake-diagnostic-type diag)))
           (message "Type: %S (class: %s)" type (type-of type)))))))
+
 (defun flyover--error-position-< (err1 err2)
   "Compare two errors ERR1 and ERR2 by position."
   (let ((line1 (flycheck-error-line err1))
@@ -808,9 +823,11 @@ Returns a list of strings, each representing a line."
           (message "Error levels: %S"
                    (mapcar #'flycheck-error-level sorted-errors)))
 
+        ;; Always clear overlays first
+        (flyover--clear-overlays)
+        
         (when filtered-errors
-          (flyover--clear-overlays)
-          ;; Reverse the list to maintain correct display order
+          ;; Create new overlays for current errors
           (setq flyover--overlays
                 (cl-loop for err in filtered-errors
                          when (flycheck-error-p err)
@@ -885,13 +902,31 @@ Returns a list of strings, each representing a line."
   (advice-remove 'flymake-handle-report
                  #'flyover--maybe-display-errors-debounced))
 
+(defun flyover--on-flycheck-status-change (status)
+  "Handle Flycheck status changes to update overlays.
+STATUS is the new flycheck status."
+  (when flyover-mode
+    (cond
+     ((eq status 'finished)
+      ;; Syntax check finished, update overlays
+      (flyover--maybe-display-errors-debounced))
+     ((eq status 'no-checker)
+      ;; No checker available, clear overlays
+      (flyover--clear-overlays))
+     ((eq status 'not-checked)
+      ;; Buffer not checked, clear overlays
+      (flyover--clear-overlays)))))
+
 (defun flyover--enable ()
   "Enable Flycheck/Flymake overlay mode."
   (flyover--ensure-flycheck)
   (when (and (memq 'flycheck flyover-checkers)
              (featurep 'flycheck))
     (flyover--safe-add-hook 'flycheck-after-syntax-check-hook
-                                     #'flyover--maybe-display-errors-debounced))
+                                     #'flyover--maybe-display-errors-debounced)
+    ;; Also hook into status changes to catch when errors are cleared
+    (flyover--safe-add-hook 'flycheck-status-changed-functions
+                                     #'flyover--on-flycheck-status-change))
   (when (memq 'flymake flyover-checkers)
     (flyover--enable-flymake-hooks))
   
@@ -904,6 +939,8 @@ Returns a list of strings, each representing a line."
   "Disable Flycheck/Flymake overlay mode."
   (flyover--safe-remove-hook 'flycheck-after-syntax-check-hook
                                       #'flyover--maybe-display-errors-debounced)
+  (flyover--safe-remove-hook 'flycheck-status-changed-functions
+                                      #'flyover--on-flycheck-status-change)
   (when (memq 'flymake flyover-checkers)
     (flyover--disable-flymake-hooks))
   
