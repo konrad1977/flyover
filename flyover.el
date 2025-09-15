@@ -1,7 +1,7 @@
 ;;; flyover.el --- Display Flycheck and Flymake errors with overlays -*- lexical-binding: t -*-
 
 ;; Author: Mikael Konradsson <mikael.konradsson@outlook.com>
-;; Version: 0.8.7
+;; Version: 0.8.8
 ;; Package-Requires: ((emacs "27.1") (flymake "1.0"))
 ;; Keywords: convenience, tools, flycheck, flymake
 ;; URL: https://github.com/konrad1977/flyover
@@ -425,6 +425,25 @@ Handles various forms that Flymake types can take."
         (and (= line1 line2)
              (< (or col1 0) (or col2 0))))))
 
+(defun flyover--normalize-level (level)
+  "Normalize LEVEL to a standard symbol (error, warning, or info).
+Handles various forms that different checkers might return."
+  (let ((level-str (cond
+                    ((symbolp level) (symbol-name level))
+                    ((stringp level) level)
+                    (t (format "%s" level)))))
+    (cond
+     ;; Direct symbol matches
+     ((eq level 'error) 'error)
+     ((eq level 'warning) 'warning)
+     ((eq level 'info) 'info)
+     ;; String pattern matching (case-insensitive)
+     ((string-match-p "error" (downcase level-str)) 'error)
+     ((string-match-p "warn" (downcase level-str)) 'warning)
+     ((string-match-p "info\\|note\\|hint" (downcase level-str)) 'info)
+     ;; Default fallback
+     (t 'warning))))
+
 (defun flyover--is-valid-error (err)
   "Check if ERR is a valid flycheck error with proper positioning."
   (and err
@@ -432,7 +451,7 @@ Handles various forms that Flymake types can take."
        (flycheck-error-p err)
        (let ((line (flycheck-error-line err))
              (column (flycheck-error-column err))
-             (level (flycheck-error-level err)))
+             (level (flyover--normalize-level (flycheck-error-level err))))
          (and (numberp line)
               (>= line 0)
               (or (not column)
@@ -568,7 +587,7 @@ ERROR is the optional original flycheck error object."
   "Calculate overlay priority based on ERROR level and column position."
   (let* ((col-pos (when (flycheck-error-p error)
                     (or (flycheck-error-column error) 0)))
-         (level-priority (pcase (flycheck-error-level error)
+         (level-priority (pcase (flyover--normalize-level (flycheck-error-level error))
                            ('error flyover--error-priority)
                            ('warning flyover--warning-priority)
                            ('info flyover--info-priority)
@@ -589,7 +608,7 @@ ERROR is the optional original flycheck error object."
   "Create display components for overlay with FACE, ERROR, and MSG.
 Returns a plist with :fg-color, :bg-color, :tinted-fg, :face-with-colors,
 :indicator, :virtual-line, and :marked-string."
-  (let* ((colors (flyover--get-face-colors (flycheck-error-level error)))
+  (let* ((colors (flyover--get-face-colors (flyover--normalize-level (flycheck-error-level error))))
          (fg-color (car colors))
          (bg-color (cdr colors))
          (tinted-fg (if flyover-text-tint
@@ -821,7 +840,9 @@ Returns a list of strings, each representing a line."
                                    (flycheck-error-column err)))
                            sorted-errors))
           (message "Error levels: %S"
-                   (mapcar #'flycheck-error-level sorted-errors)))
+                   (mapcar (lambda (err) 
+                            (flyover--normalize-level (flycheck-error-level err)))
+                           sorted-errors)))
 
         ;; Always clear overlays first
         (flyover--clear-overlays)
@@ -831,7 +852,7 @@ Returns a list of strings, each representing a line."
           (setq flyover--overlays
                 (cl-loop for err in filtered-errors
                          when (flycheck-error-p err)
-                         for level = (flycheck-error-level err)
+                         for level = (flyover--normalize-level (flycheck-error-level err))
                          for msg = (flycheck-error-message err)
                          for cleaned-msg = (and msg (flyover--remove-checker-name msg))
                          for region = (and cleaned-msg (flyover--get-error-region err))
