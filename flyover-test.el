@@ -11,6 +11,12 @@
 
 (require 'ert)
 
+;; Try to load flycheck for testing
+(condition-case nil
+    (require 'flycheck)
+  (error
+   (message "Warning: flycheck not available. Some tests may not work.")))
+
 (defun flyover-test-insert-errors ()
   "Insert sample errors into current buffer for testing.
 Returns a list of created errors for verification."
@@ -95,6 +101,65 @@ Returns a list of created errors for verification."
         (flyover-max-line-length 20))
     (should (equal (flyover--wrap-message "Exactly twenty chars" 20)
                    '("Exactly twenty chars")))))
+
+(ert-deftest flyover-test-show-only-when-cursor-on-same-line ()
+  "Test that flyover-show-only-when-on-same-line shows overlays only on current line."
+  (skip-unless (fboundp 'flycheck-error-new-at))
+  (with-temp-buffer
+    (flyover-mode 1)
+    (setq-local flyover-show-only-when-on-same-line t)
+    
+    ;; Insert test content
+    (insert "Line 1: No errors\n")
+    (insert "Line 2: Has error\n")
+    (insert "Line 3: Has warning\n")
+    (insert "Line 4: No errors\n")
+    
+    ;; Clear the modified flag
+    (set-buffer-modified-p nil)
+    
+    ;; Create sample errors
+    (let ((errors (list
+                   (flycheck-error-new-at 2 5 'error "Error on line 2")
+                   (flycheck-error-new-at 3 10 'warning "Warning on line 3"))))
+      
+      ;; Mock flyover--get-all-errors to return our test errors
+      (cl-letf (((symbol-function 'flyover--get-all-errors) (lambda () errors)))
+        
+        ;; Test with cursor on line 1 (no errors)
+        (goto-char (point-min))
+        (flyover--maybe-display-errors)
+        (should (= (length flyover--overlays) 0))
+        
+        ;; Test with cursor on line 2 (has error)
+        (goto-char (point-min))
+        (forward-line 1)
+        (flyover--maybe-display-errors)
+        (should (= (length flyover--overlays) 1))
+        (let ((ov (car flyover--overlays)))
+          (should (overlayp ov))
+          (let ((err (overlay-get ov 'flycheck-error)))
+            (should (flycheck-error-p err))
+            (should (eq (flycheck-error-level err) 'error))
+            (should (= (flycheck-error-line err) 2))))
+        
+        ;; Test with cursor on line 3 (has warning)
+        (goto-char (point-min))
+        (forward-line 2)
+        (flyover--maybe-display-errors)
+        (should (= (length flyover--overlays) 1))
+        (let ((ov (car flyover--overlays)))
+          (should (overlayp ov))
+          (let ((err (overlay-get ov 'flycheck-error)))
+            (should (flycheck-error-p err))
+            (should (eq (flycheck-error-level err) 'warning))
+            (should (= (flycheck-error-line err) 3))))
+        
+        ;; Test with cursor on line 4 (no errors)
+        (goto-char (point-min))
+        (forward-line 3)
+        (flyover--maybe-display-errors)
+        (should (= (length flyover--overlays) 0))))))
 
 (ert-deftest flyover-test-wrap-message-multiple-spaces ()
   "Test wrapping with multiple spaces."

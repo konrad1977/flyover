@@ -1,7 +1,7 @@
 ;;; flyover.el --- Display Flycheck and Flymake errors with overlays -*- lexical-binding: t -*-
 
 ;; Author: Mikael Konradsson <mikael.konradsson@outlook.com>
-;; Version: 0.8.8
+;; Version: 0.9.0
 ;; Package-Requires: ((emacs "27.1") (flymake "1.0"))
 ;; Keywords: convenience, tools, flycheck, flymake
 ;; URL: https://github.com/konrad1977/flyover
@@ -171,17 +171,61 @@ Lower values make backgrounds darker."
   :type 'boolean
   :group 'flyover)
 
-(defcustom flyover-hide-when-cursor-is-on-same-line t
-  "Hide error messages when the cursor is on the same line."
+(defcustom flyover-display-mode 'always
+  "Control when to display error overlays based on cursor position.
+
+Available modes:
+- `always': Always show all error overlays (default behavior)
+- `hide-on-same-line': Hide overlays when cursor is on the same line as the error
+- `hide-at-exact-position': Hide overlays when cursor is at the exact position of the error
+- `show-only-on-same-line': Only show overlays for errors on the current line"
+  :type '(choice (const :tag "Always show overlays" always)
+                 (const :tag "Hide when cursor on same line" hide-on-same-line)
+                 (const :tag "Hide when cursor at exact position" hide-at-exact-position)
+                 (const :tag "Show only on current line" show-only-on-same-line))
+  :group 'flyover)
+
+;; Obsolete variables for backward compatibility
+(defcustom flyover-hide-when-cursor-is-on-same-line nil
+  "Hide error messages when the cursor is on the same line.
+This variable is obsolete; use `flyover-display-mode' instead."
   :type 'boolean
   :group 'flyover)
+(make-obsolete-variable 'flyover-hide-when-cursor-is-on-same-line
+                        'flyover-display-mode "0.9.0")
 
 (defcustom flyover-hide-when-cursor-is-at-same-line nil
   "Hide error messages when cursor is at same line as error.
-Unlike `flyover-hide-when-cursor-is-on-same-line', this
-only hides when cursor is at the exact line position of the error."
+This variable is obsolete; use `flyover-display-mode' instead."
   :type 'boolean
   :group 'flyover)
+(make-obsolete-variable 'flyover-hide-when-cursor-is-at-same-line
+                        'flyover-display-mode "0.9.0")
+
+(defcustom flyover-show-only-when-on-same-line nil
+  "Show error messages only when the cursor is on the same line.
+This variable is obsolete; use `flyover-display-mode' instead."
+  :type 'boolean
+  :group 'flyover)
+(make-obsolete-variable 'flyover-show-only-when-on-same-line
+                        'flyover-display-mode "0.9.0")
+
+;; Migration helper: automatically set new variable based on old settings
+(defun flyover--migrate-display-settings ()
+  "Migrate from old boolean settings to new display-mode setting."
+  (cond
+   ;; If user had show-only-when-on-same-line enabled, use that
+   (flyover-show-only-when-on-same-line
+    (setq flyover-display-mode 'show-only-on-same-line)
+    (setq flyover-show-only-when-on-same-line nil))
+   ;; If user had hide-when-cursor-is-on-same-line enabled
+   (flyover-hide-when-cursor-is-on-same-line
+    (setq flyover-display-mode 'hide-on-same-line)
+    (setq flyover-hide-when-cursor-is-on-same-line nil))
+   ;; If user had hide-when-cursor-is-at-same-line enabled
+   (flyover-hide-when-cursor-is-at-same-line
+    (setq flyover-display-mode 'hide-at-exact-position)
+    (setq flyover-hide-when-cursor-is-at-same-line nil))))
 
 (defcustom flyover-hide-checker-name t
   "Hide the checker name in the error message."
@@ -889,7 +933,8 @@ Returns a list of strings, each representing a line."
 
 (defun flyover--safe-remove-hook (hook function)
   "Safely remove FUNCTION from HOOK if present."
-  (when (memq function (symbol-value hook))
+  (when (and (boundp hook)
+             (memq function (symbol-value hook)))
     (remove-hook hook function t)))
 
 (defun flyover--enable-flymake-hooks ()
@@ -953,46 +998,100 @@ STATUS is the new flycheck status."
   
   (flyover--safe-add-hook 'after-change-functions
                                    #'flyover--handle-buffer-changes)
+  ;; Add post-command-hook when we need to track cursor position
+  (when (memq flyover-display-mode '(show-only-on-same-line 
+                                      hide-on-same-line 
+                                      hide-at-exact-position))
+    (flyover--safe-add-hook 'post-command-hook
+                            #'flyover--maybe-display-errors-debounced))
   ;; Force initial display of existing errors
   (flyover--maybe-display-errors))
 
 (defun flyover--disable ()
   "Disable Flycheck/Flymake overlay mode."
-  (flyover--safe-remove-hook 'flycheck-after-syntax-check-hook
-                                      #'flyover--maybe-display-errors-debounced)
-  (flyover--safe-remove-hook 'flycheck-status-changed-functions
-                                      #'flyover--on-flycheck-status-change)
+  ;; Only remove flycheck hooks if flycheck is available
+  (when (and (memq 'flycheck flyover-checkers)
+             (featurep 'flycheck))
+    (flyover--safe-remove-hook 'flycheck-after-syntax-check-hook
+                                        #'flyover--maybe-display-errors-debounced)
+    (flyover--safe-remove-hook 'flycheck-status-changed-functions
+                                        #'flyover--on-flycheck-status-change))
   (when (memq 'flymake flyover-checkers)
     (flyover--disable-flymake-hooks))
   
   (flyover--safe-remove-hook 'after-change-functions
                                       #'flyover--handle-buffer-changes)
+  ;; Remove post-command-hook if it was added
+  (flyover--safe-remove-hook 'post-command-hook
+                              #'flyover--maybe-display-errors-debounced)
   (flyover--clear-overlays))
 
 (defun flyover--maybe-display-errors ()
-  "Display errors except on current line."
+  "Display errors based on cursor position and settings."
+  ;; Migrate old settings if needed
+  (flyover--migrate-display-settings)
   (unless (buffer-modified-p)
     (let ((current-line (line-number-at-pos))
           (current-col (current-column))
           (to-delete))
-      (flyover--display-errors)
-      (dolist (ov flyover--overlays)
-        (when (and (overlayp ov)
-                   (= (line-number-at-pos (overlay-start ov)) current-line))
-          (when flyover-hide-when-cursor-is-on-same-line
-            (push ov to-delete))
-          (when (and flyover-hide-when-cursor-is-at-same-line
-                     (overlay-get ov 'flycheck-error)
-                     (let ((error (overlay-get ov 'flycheck-error)))
-                       (= (if (featurep 'flycheck)
-                              (flycheck-error-column error)
-                            (plist-get error :column))
-                          current-col)))
-            (push ov to-delete))))
-      ;; Delete collected overlays
-      (dolist (ov to-delete)
-        (delete-overlay ov)
-        (setq flyover--overlays (delq ov flyover--overlays))))))
+      (pcase flyover-display-mode
+        ;; Show only errors on the current line
+        ('show-only-on-same-line
+         ;; Always clear all overlays first
+         (flyover--clear-overlays)
+         (let ((all-errors (flyover--get-all-errors))
+               (current-line-errors))
+           (when flyover-debug
+             (message "DEBUG show-only-on-same-line: cursor at line %d, found %d total errors" 
+                      current-line (length all-errors)))
+           ;; Filter to only show errors on current line
+           (dolist (err all-errors)
+             (when (and (flycheck-error-p err)
+                        (= (flycheck-error-line err) current-line))
+               (push err current-line-errors)
+               (when flyover-debug
+                 (message "DEBUG: Including error on line %d: %s" 
+                          (flycheck-error-line err) (flycheck-error-message err)))))
+           (when flyover-debug
+             (message "DEBUG: Displaying %d errors for current line %d" 
+                      (length current-line-errors) current-line))
+           ;; Only create overlays if there are errors on current line
+           (when current-line-errors
+             (flyover--display-errors current-line-errors))))
+        
+        ;; Always show all errors (default)
+        ('always
+         (flyover--display-errors))
+        
+        ;; Hide errors on the same line as cursor
+        ('hide-on-same-line
+         (flyover--display-errors)
+         (dolist (ov flyover--overlays)
+           (when (and (overlayp ov)
+                      (= (line-number-at-pos (overlay-start ov)) current-line))
+             (push ov to-delete)))
+         ;; Delete collected overlays
+         (dolist (ov to-delete)
+           (delete-overlay ov)
+           (setq flyover--overlays (delq ov flyover--overlays))))
+        
+        ;; Hide errors at exact cursor position
+        ('hide-at-exact-position
+         (flyover--display-errors)
+         (dolist (ov flyover--overlays)
+           (when (and (overlayp ov)
+                      (= (line-number-at-pos (overlay-start ov)) current-line)
+                      (overlay-get ov 'flycheck-error)
+                      (let ((error (overlay-get ov 'flycheck-error)))
+                        (= (if (featurep 'flycheck)
+                               (flycheck-error-column error)
+                             (plist-get error :column))
+                           current-col)))
+             (push ov to-delete)))
+         ;; Delete collected overlays
+         (dolist (ov to-delete)
+           (delete-overlay ov)
+           (setq flyover--overlays (delq ov flyover--overlays))))))))
 
 (defun flyover--maybe-display-errors-debounced ()
   "Debounced version of `flyover--maybe-display-errors`."
