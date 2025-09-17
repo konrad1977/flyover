@@ -408,7 +408,6 @@ Only converts diagnostics whose level is in `flyover-levels'."
 (defun flyover--flymake-type-to-level (type)
   "Convert Flymake diagnostic TYPE to Flycheck level.
 Handles various forms that Flymake types can take."
-  (message type)
   (let ((type-str (cond
                    ((symbolp type) (symbol-name type))
                    ((stringp type) type)
@@ -865,6 +864,23 @@ Returns a list of strings, each representing a line."
         (push current-line lines))
       (nreverse lines))))
 
+(defun flyover--overlays-match-errors-p (overlays errors)
+  "Check if current OVERLAYS match the given ERRORS.
+Returns t if they match (no need to recreate), nil if they differ."
+  (and (= (length overlays) (length errors))
+       (cl-every (lambda (overlay)
+                   (when-let* ((overlay-error (overlay-get overlay 'flycheck-error))
+                               (overlay-line (flycheck-error-line overlay-error))
+                               (overlay-col (flycheck-error-column overlay-error))
+                               (overlay-msg (flycheck-error-message overlay-error)))
+                     (cl-some (lambda (err)
+                                (and (= (flycheck-error-line err) overlay-line)
+                                     (= (or (flycheck-error-column err) 0)
+                                        (or overlay-col 0))
+                                     (string= (flycheck-error-message err) overlay-msg)))
+                              errors)))
+                 overlays)))
+
 (defun flyover--display-errors (&optional errors)
   "Display ERRORS using overlays."
   (condition-case display-err
@@ -884,26 +900,28 @@ Returns a list of strings, each representing a line."
                                    (flycheck-error-column err)))
                            sorted-errors))
           (message "Error levels: %S"
-                   (mapcar (lambda (err) 
-                            (flyover--normalize-level (flycheck-error-level err)))
+                   (mapcar (lambda (err)
+                             (flyover--normalize-level (flycheck-error-level err)))
                            sorted-errors)))
 
-        ;; Always clear overlays first
-        (flyover--clear-overlays)
-        
-        (when filtered-errors
-          ;; Create new overlays for current errors
-          (setq flyover--overlays
-                (cl-loop for err in filtered-errors
-                         when (flycheck-error-p err)
-                         for level = (flyover--normalize-level (flycheck-error-level err))
-                         for msg = (flycheck-error-message err)
-                         for cleaned-msg = (and msg (flyover--remove-checker-name msg))
-                         for region = (and cleaned-msg (flyover--get-error-region err))
-                         for overlay = (and region (flyover--create-overlay
-                                                    region level cleaned-msg err))
-                         when overlay
-                         collect overlay))))
+        ;; Only clear overlays if we need to rebuild them completely
+        ;; For incremental updates during editing, we preserve valid overlays
+        (unless (flyover--overlays-match-errors-p flyover--overlays filtered-errors)
+          (flyover--clear-overlays)
+          
+          (when filtered-errors
+            ;; Create new overlays for current errors
+            (setq flyover--overlays
+                  (cl-loop for err in filtered-errors
+                           when (flycheck-error-p err)
+                           for level = (flyover--normalize-level (flycheck-error-level err))
+                           for msg = (flycheck-error-message err)
+                           for cleaned-msg = (and msg (flyover--remove-checker-name msg))
+                           for region = (and cleaned-msg (flyover--get-error-region err))
+                           for overlay = (and region (flyover--create-overlay
+                                                      region level cleaned-msg err))
+                           when overlay
+                           collect overlay)))))
     (error
      (when flyover-debug
        (message "Debug: Display error: %S" display-err)))))
@@ -989,19 +1007,19 @@ STATUS is the new flycheck status."
   (when (and (memq 'flycheck flyover-checkers)
              (featurep 'flycheck))
     (flyover--safe-add-hook 'flycheck-after-syntax-check-hook
-                                     #'flyover--maybe-display-errors-debounced)
+                            #'flyover--maybe-display-errors-debounced)
     ;; Also hook into status changes to catch when errors are cleared
     (flyover--safe-add-hook 'flycheck-status-changed-functions
-                                     #'flyover--on-flycheck-status-change))
+                            #'flyover--on-flycheck-status-change))
   (when (memq 'flymake flyover-checkers)
     (flyover--enable-flymake-hooks))
   
   (flyover--safe-add-hook 'after-change-functions
-                                   #'flyover--handle-buffer-changes)
+                          #'flyover--handle-buffer-changes)
   ;; Add post-command-hook when we need to track cursor position
-  (when (memq flyover-display-mode '(show-only-on-same-line 
-                                      hide-on-same-line 
-                                      hide-at-exact-position))
+  (when (memq flyover-display-mode '(show-only-on-same-line
+                                     hide-on-same-line
+                                     hide-at-exact-position))
     (flyover--safe-add-hook 'post-command-hook
                             #'flyover--maybe-display-errors-debounced))
   ;; Force initial display of existing errors
@@ -1030,7 +1048,12 @@ STATUS is the new flycheck status."
   "Display errors based on cursor position and settings."
   ;; Migrate old settings if needed
   (flyover--migrate-display-settings)
-  (unless (buffer-modified-p)
+  ;; Only skip display if buffer is modified AND we're in a position-dependent mode
+  ;; For 'always mode, we should display even when buffer is modified
+  (unless (and (buffer-modified-p)
+               (memq flyover-display-mode '(show-only-on-same-line
+                                            hide-on-same-line
+                                            hide-at-exact-position)))
     (let ((current-line (line-number-at-pos))
           (current-col (current-column))
           (to-delete))
@@ -1042,7 +1065,7 @@ STATUS is the new flycheck status."
          (let ((all-errors (flyover--get-all-errors))
                (current-line-errors))
            (when flyover-debug
-             (message "DEBUG show-only-on-same-line: cursor at line %d, found %d total errors" 
+             (message "DEBUG show-only-on-same-line: cursor at line %d, found %d total errors"
                       current-line (length all-errors)))
            ;; Filter to only show errors on current line
            (dolist (err all-errors)
@@ -1050,10 +1073,10 @@ STATUS is the new flycheck status."
                         (= (flycheck-error-line err) current-line))
                (push err current-line-errors)
                (when flyover-debug
-                 (message "DEBUG: Including error on line %d: %s" 
+                 (message "DEBUG: Including error on line %d: %s"
                           (flycheck-error-line err) (flycheck-error-message err)))))
            (when flyover-debug
-             (message "DEBUG: Displaying %d errors for current line %d" 
+             (message "DEBUG: Displaying %d errors for current line %d"
                       (length current-line-errors) current-line))
            ;; Only create overlays if there are errors on current line
            (when current-line-errors
@@ -1111,22 +1134,25 @@ STATUS is the new flycheck status."
 BEG and END mark the beginning and end of the changed region."
   (condition-case err
       (when (buffer-modified-p)
-        (let* ((beg-line (line-number-at-pos beg))
-               (end-line (line-number-at-pos end)))
-          ;; Remove overlays on all modified lines
-          (dolist (ov flyover--overlays)
-            (when (and ov
-                       (overlayp ov)
-                       (overlay-buffer ov)  ; Check if overlay is still valid
-                       (let ((ov-line (line-number-at-pos (overlay-start ov))))
-                         (and (>= ov-line beg-line) (<= ov-line end-line))))
-              (delete-overlay ov)))
-          ;; Update our list of valid overlays
-          (setq flyover--overlays
-                (cl-remove-if-not (lambda (ov)
-                                    (and (overlayp ov)
-                                        (overlay-buffer ov)))
-                                  flyover--overlays))))
+        ;; Only clear overlays if we're in always mode, otherwise let the
+        ;; position-dependent modes handle their own overlay management
+        (when (eq flyover-display-mode 'always)
+          (let* ((beg-line (line-number-at-pos beg))
+                 (end-line (line-number-at-pos end)))
+            ;; Only remove overlays that are actually affected by the change
+            (dolist (ov flyover--overlays)
+              (when (and ov
+                         (overlayp ov)
+                         (overlay-buffer ov)  ; Check if overlay is still valid
+                         (let ((ov-line (line-number-at-pos (overlay-start ov))))
+                           (and (>= ov-line beg-line) (<= ov-line end-line))))
+                (delete-overlay ov)))
+            ;; Update our list of valid overlays
+            (setq flyover--overlays
+                  (cl-remove-if-not (lambda (ov)
+                                      (and (overlayp ov)
+                                          (overlay-buffer ov)))
+                                    flyover--overlays)))))
     (error
      (message "Error in flyover--handle-buffer-changes: %S" err))))
 
