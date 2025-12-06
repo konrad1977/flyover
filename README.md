@@ -28,6 +28,44 @@ A modern, aesthetic overlay display for *Flycheck* and *Flymake* in Emacs. Flyov
 
 ## Installation
 
+### Using use-package (recommended)
+
+```elisp
+(use-package flyover
+  :ensure t
+  :hook ((flycheck-mode . flyover-mode)
+         (flymake-mode . flyover-mode))
+  :custom
+  ;; Checker settings
+  (flyover-checkers '(flycheck flymake))
+  (flyover-levels '(error warning info))
+
+  ;; Appearance
+  (flyover-use-theme-colors t)
+  (flyover-background-lightness 45)
+  (flyover-percent-darker 40)
+  (flyover-text-tint 'lighter)
+  (flyover-text-tint-percent 50)
+
+  ;; Icons
+  (flyover-info-icon " ")
+  (flyover-warning-icon " ")
+  (flyover-error-icon " ")
+
+  ;; Display settings
+  (flyover-hide-checker-name t)
+  (flyover-show-virtual-line t)
+  (flyover-virtual-line-type 'curved-dotted-arrow)
+  (flyover-line-position-offset 1)
+
+  ;; Message wrapping
+  (flyover-wrap-messages t)
+  (flyover-max-line-length 80)
+
+  ;; Performance
+  (flyover-debounce-interval 0.2))
+```
+
 ### Manual Installation
 
 1. Download `flyover.el`
@@ -198,16 +236,21 @@ You can customize the appearance of the error indicators using various line and 
 
 ```elisp
 ;;; Hide checker name for a cleaner UI
-(setq flyover-hide-checker-name t) 
+(setq flyover-hide-checker-name t)
 
 ;;; show at end of the line instead.
-(setq flyover-show-at-eol t) 
+(setq flyover-show-at-eol t)
 
 ;;; Hide overlay when cursor is at same line, good for show-at-eol.
-(setq flyover-hide-when-cursor-is-on-same-line t) 
+(setq flyover-hide-when-cursor-is-on-same-line t)
 
 ;;; Show an arrow (or icon of your choice) before the error to highlight the error a bit more.
 (setq flyover-show-virtual-line t)
+
+;;; Show error ID/code in the overlay (default: nil)
+;;; When enabled, displays the error identifier in brackets, e.g., "Missing semicolon [E001]"
+;;; Useful for looking up error codes or adding suppression comments
+(setq flyover-show-error-id t)
 ```
 
 <p align="center">

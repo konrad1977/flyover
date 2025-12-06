@@ -3,6 +3,7 @@
 ;;; code:
 
 (require 'flymake)
+(require 'flyover)
 
 (defun flymake-test-backend (report-fn &rest _args)
   "Test Flymake backend that creates sample diagnostics."
@@ -45,7 +46,7 @@
       
       ;; Start Flymake and enable overlay mode
       (flymake-mode 1)
-      (flycheck-overlay-mode 1)
+      (flyover-mode 1)
       
       ;; Trigger a check
       (flymake-start))
@@ -68,7 +69,7 @@
       
       ;; Enable both modes
       (flymake-mode 1)
-      (flycheck-overlay-mode 1)
+      (flyover-mode 1)
       
       ;; Trigger check
       (flymake-start))
@@ -82,13 +83,13 @@
   (let ((overlays (overlays-in (point-min) (point-max)))
         (found nil))
     (dolist (ov overlays)
-      (when (overlay-get ov 'flycheck-overlay)
+      (when (overlay-get ov 'flyover)
         (setq found t)
-        (message "Found flycheck overlay at %d-%d: %s"
+        (message "Found flyover overlay at %d-%d: %s"
                  (overlay-start ov) (overlay-end ov)
                  (overlay-get ov 'after-string))))
     (unless found
-      (message "No flycheck overlays found!"))))
+      (message "No flyover overlays found!"))))
 
 (provide 'flymake-test)
 ;;; flymake-test.el ends here
