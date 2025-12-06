@@ -28,6 +28,44 @@ A modern, aesthetic overlay display for *Flycheck* and *Flymake* in Emacs. Flyov
 
 ## Installation
 
+### Using use-package (recommended)
+
+```elisp
+(use-package flyover
+  :ensure t
+  :hook ((flycheck-mode . flyover-mode)
+         (flymake-mode . flyover-mode))
+  :custom
+  ;; Checker settings
+  (flyover-checkers '(flycheck flymake))
+  (flyover-levels '(error warning info))
+
+  ;; Appearance
+  (flyover-use-theme-colors t)
+  (flyover-background-lightness 45)
+  (flyover-percent-darker 40)
+  (flyover-text-tint 'lighter)
+  (flyover-text-tint-percent 50)
+
+  ;; Icons
+  (flyover-info-icon " ")
+  (flyover-warning-icon " ")
+  (flyover-error-icon " ")
+
+  ;; Display settings
+  (flyover-hide-checker-name t)
+  (flyover-show-virtual-line t)
+  (flyover-virtual-line-type 'curved-dotted-arrow)
+  (flyover-line-position-offset 1)
+
+  ;; Message wrapping
+  (flyover-wrap-messages t)
+  (flyover-max-line-length 80)
+
+  ;; Performance
+  (flyover-debounce-interval 0.2))
+```
+
 ### Manual Installation
 
 1. Download `flyover.el`
