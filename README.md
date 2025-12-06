@@ -198,16 +198,21 @@ You can customize the appearance of the error indicators using various line and 
 
 ```elisp
 ;;; Hide checker name for a cleaner UI
-(setq flyover-hide-checker-name t) 
+(setq flyover-hide-checker-name t)
 
 ;;; show at end of the line instead.
-(setq flyover-show-at-eol t) 
+(setq flyover-show-at-eol t)
 
 ;;; Hide overlay when cursor is at same line, good for show-at-eol.
-(setq flyover-hide-when-cursor-is-on-same-line t) 
+(setq flyover-hide-when-cursor-is-on-same-line t)
 
 ;;; Show an arrow (or icon of your choice) before the error to highlight the error a bit more.
 (setq flyover-show-virtual-line t)
+
+;;; Show error ID/code in the overlay (default: nil)
+;;; When enabled, displays the error identifier in brackets, e.g., "Missing semicolon [E001]"
+;;; Useful for looking up error codes or adding suppression comments
+(setq flyover-show-error-id t)
 ```
 
 <p align="center">

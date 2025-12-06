@@ -1,7 +1,7 @@
 ;;; flyover.el --- Display Flycheck and Flymake errors with overlays -*- lexical-binding: t -*-
 
 ;; Author: Mikael Konradsson <mikael.konradsson@outlook.com>
-;; Version: 0.9.0
+;; Version: 0.9.1
 ;; Package-Requires: ((emacs "27.1") (flymake "1.0"))
 ;; Keywords: convenience, tools, flycheck, flymake
 ;; URL: https://github.com/konrad1977/flyover
@@ -31,6 +31,7 @@
 (declare-function flycheck-error-level "flycheck")
 (declare-function flycheck-error-message "flycheck")
 (declare-function flycheck-error-checker "flycheck")
+(declare-function flycheck-error-id "flycheck")
 
 ;; Declare flycheck variables
 (defvar flycheck-current-errors)
@@ -229,6 +230,15 @@ This variable is obsolete; use `flyover-display-mode' instead."
 
 (defcustom flyover-hide-checker-name t
   "Hide the checker name in the error message."
+  :type 'boolean
+  :group 'flyover)
+
+(defcustom flyover-show-error-id nil
+  "Show the error ID/code in the overlay message.
+When non-nil, the error identifier (if available) will be displayed
+in brackets after the error message, e.g., \"Missing semicolon [E001]\".
+This is useful for looking up error codes in documentation or for
+adding suppression comments."
   :type 'boolean
   :group 'flyover)
 
@@ -841,6 +851,27 @@ Ignores colons that appear within quotes or parentheses."
           (setq msg (string-trim (match-string 1 msg))))))
   msg)
 
+(defun flyover--get-error-id (err)
+  "Get the error ID from ERR if available.
+Works with both Flycheck errors (which have an id slot) and
+Flymake diagnostics (which may have a code in their data)."
+  (when (and err (flycheck-error-p err))
+    (condition-case nil
+        (let ((id (flycheck-error-id err)))
+          (when (and id (not (string-empty-p (format "%s" id))))
+            (format "%s" id)))
+      (error nil))))
+
+(defun flyover--format-message-with-id (msg err)
+  "Format MSG with error ID from ERR if `flyover-show-error-id' is enabled.
+Returns the message with ID appended in brackets, e.g., \"message [E001]\"."
+  (if (and flyover-show-error-id err)
+      (let ((id (flyover--get-error-id err)))
+        (if id
+            (concat msg " [" id "]")
+          msg))
+    msg))
+
 (defun flyover--wrap-message (msg max-length)
   "Wrap MSG to multiple lines with each line no longer than MAX-LENGTH.
 Returns a list of strings, each representing a line."
@@ -917,9 +948,11 @@ Returns t if they match (no need to recreate), nil if they differ."
                            for level = (flyover--normalize-level (flycheck-error-level err))
                            for msg = (flycheck-error-message err)
                            for cleaned-msg = (and msg (flyover--remove-checker-name msg))
-                           for region = (and cleaned-msg (flyover--get-error-region err))
+                           for final-msg = (and cleaned-msg
+                                                (flyover--format-message-with-id cleaned-msg err))
+                           for region = (and final-msg (flyover--get-error-region err))
                            for overlay = (and region (flyover--create-overlay
-                                                      region level cleaned-msg err))
+                                                      region level final-msg err))
                            when overlay
                            collect overlay)))))
     (error
