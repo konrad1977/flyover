@@ -1019,29 +1019,29 @@ Returns t if they match (no need to recreate), nil if they differ."
    ;; Modern Emacs with the proper hook
    ((boundp 'flymake-after-update-diagnostics-hook)
     (flyover--safe-add-hook 'flymake-after-update-diagnostics-hook
-                                     #'flyover--maybe-display-errors-debounced))
+                            #'flyover--maybe-display-errors-debounced))
    ;; Emacs 29+ with different hook name
    ((boundp 'flymake-diagnostics-updated-hook)
     (flyover--safe-add-hook 'flymake-diagnostics-updated-hook
-                                     #'flyover--maybe-display-errors-debounced))
+                            #'flyover--maybe-display-errors-debounced))
    ;; Fallback for older versions
    (t
     (flyover--safe-add-hook 'after-save-hook
-                                     #'flyover--maybe-display-errors-debounced)
-    (advice-add 'flymake-handle-report :after
+                            #'flyover--maybe-display-errors-debounced)
+    (advice-add 'flymake--handle-report :after
                 #'flyover--maybe-display-errors-debounced))))
 
 (defun flyover--disable-flymake-hooks ()
   "Disable Flymake-specific hooks."
   (when (boundp 'flymake-after-update-diagnostics-hook)
     (flyover--safe-remove-hook 'flymake-after-update-diagnostics-hook
-                                        #'flyover--maybe-display-errors-debounced))
+                               #'flyover--maybe-display-errors-debounced))
   (when (boundp 'flymake-diagnostics-updated-hook)
     (flyover--safe-remove-hook 'flymake-diagnostics-updated-hook
-                                        #'flyover--maybe-display-errors-debounced))
+                               #'flyover--maybe-display-errors-debounced))
   (flyover--safe-remove-hook 'after-save-hook
-                                      #'flyover--maybe-display-errors-debounced)
-  (advice-remove 'flymake-handle-report
+                             #'flyover--maybe-display-errors-debounced)
+  (advice-remove 'flymake--handle-report
                  #'flyover--maybe-display-errors-debounced))
 
 (defun flyover--on-flycheck-status-change (status)
