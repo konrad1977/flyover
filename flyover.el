@@ -1172,8 +1172,8 @@ STATUS is the new flycheck status."
            (delete-overlay ov)
            (setq flyover--overlays (delq ov flyover--overlays))))))))
 
-(defun flyover--maybe-display-errors-debounced ()
-  "Debounced version of `flyover--maybe-display-errors`."
+(defun flyover--maybe-display-errors-debounced (&rest _)
+  "Debounced version of `flyover--maybe-display-errors'."
   (condition-case err
       (progn
         (when flyover--debounce-timer
@@ -1207,7 +1207,7 @@ BEG and END mark the beginning and end of the changed region."
             (setq flyover--overlays
                   (cl-remove-if-not (lambda (ov)
                                       (and (overlayp ov)
-                                          (overlay-buffer ov)))
+                                           (overlay-buffer ov)))
                                     flyover--overlays)))))
     (error
      (message "Error in flyover--handle-buffer-changes: %S" err))))
