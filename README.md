@@ -264,6 +264,37 @@ You can customize the appearance of the error indicators using various line and 
   <img src="https://github.com/konrad1977/flycheck-overlay/blob/main/screenshots/no_checker_name.png" alt="Screenshot of overlay-usage for Emacs."/>
 </p>
 
+### Border Styles
+
+You can customize the border style of the overlay message box. This requires a Nerd Font to display correctly.
+
+```elisp
+;;; Border style options: 'none, 'pill, or 'arrow
+(setq flyover-border-style 'pill)
+
+;;; Toggle icon visibility (default: t)
+(setq flyover-show-icon t)
+
+;;; Customize border characters for pill style
+(setq flyover-border-left-char (string ?\ue0b6))  ; Left semicircle
+(setq flyover-border-right-char (string ?\ue0b4)) ; Right semicircle
+
+;;; Customize border characters for arrow style
+(setq flyover-arrow-left-char (string ?\ue0b2))   ; Left arrow
+(setq flyover-arrow-right-char (string ?\ue0b0))  ; Right arrow
+```
+
+| Style | Description |
+|-------|-------------|
+| `none` | No border decorations |
+| `pill` | Pill/capsule style with rounded ends |
+| `arrow` | Arrow/chevron style borders |
+
+<p align="center">
+  <img src="https://github.com/konrad1977/flycheck-overlay/blob/main/screenshots/border_pill.png" alt="Pill border style"/>
+  <img src="https://github.com/konrad1977/flycheck-overlay/blob/main/screenshots/border_arrow.png" alt="Arrow border style"/>
+</p>
+
 ### Show under or after the faulty code
 
 <p align="center">
