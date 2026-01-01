@@ -1,7 +1,7 @@
 ;;; flyover.el --- Display Flycheck and Flymake errors with overlays -*- lexical-binding: t -*-
 
 ;; Author: Mikael Konradsson <mikael.konradsson@outlook.com>
-;; Version: 0.9.2
+;; Version: 0.9.5
 ;; Package-Requires: ((emacs "27.1") (flymake "1.0"))
 ;; Keywords: convenience, tools, flycheck, flymake
 ;; URL: https://github.com/konrad1977/flyover
@@ -145,13 +145,19 @@ Inherits from the theme's success face."
   :group 'flyover)
 
 (defcustom flyover-error-icon " "
-  "Icon used for warnings."
+  "Icon used for errors."
   :type 'string
   :group 'flyover)
 
 (defcustom flyover-virtual-line-icon nil
   "Icon used for the virtual line."
   :type 'string
+  :group 'flyover)
+
+(defcustom flyover-show-icon t
+  "Whether to show the icon indicator on overlays.
+When nil, the icon area is completely hidden."
+  :type 'boolean
   :group 'flyover)
 
 (defcustom flyover-percent-darker 50
@@ -216,22 +222,28 @@ This variable is obsolete; use `flyover-display-mode' instead."
 (make-obsolete-variable 'flyover-show-only-when-on-same-line
                         'flyover-display-mode "0.9.0")
 
+(defvar flyover--settings-migrated nil
+  "Non-nil if old settings have been migrated to new format.")
+
 ;; Migration helper: automatically set new variable based on old settings
 (defun flyover--migrate-display-settings ()
-  "Migrate from old boolean settings to new display-mode setting."
-  (cond
-   ;; If user had show-only-when-on-same-line enabled, use that
-   (flyover-show-only-when-on-same-line
-    (setq flyover-display-mode 'show-only-on-same-line)
-    (setq flyover-show-only-when-on-same-line nil))
-   ;; If user had hide-when-cursor-is-on-same-line enabled
-   (flyover-hide-when-cursor-is-on-same-line
-    (setq flyover-display-mode 'hide-on-same-line)
-    (setq flyover-hide-when-cursor-is-on-same-line nil))
-   ;; If user had hide-when-cursor-is-at-same-line enabled
-   (flyover-hide-when-cursor-is-at-same-line
-    (setq flyover-display-mode 'hide-at-exact-position)
-    (setq flyover-hide-when-cursor-is-at-same-line nil))))
+  "Migrate from old boolean settings to new display-mode setting.
+Only runs once per session."
+  (unless flyover--settings-migrated
+    (cond
+     ;; If user had show-only-when-on-same-line enabled, use that
+     (flyover-show-only-when-on-same-line
+      (setq flyover-display-mode 'show-only-on-same-line)
+      (setq flyover-show-only-when-on-same-line nil))
+     ;; If user had hide-when-cursor-is-on-same-line enabled
+     (flyover-hide-when-cursor-is-on-same-line
+      (setq flyover-display-mode 'hide-on-same-line)
+      (setq flyover-hide-when-cursor-is-on-same-line nil))
+     ;; If user had hide-when-cursor-is-at-same-line enabled
+     (flyover-hide-when-cursor-is-at-same-line
+      (setq flyover-display-mode 'hide-at-exact-position)
+      (setq flyover-hide-when-cursor-is-at-same-line nil)))
+    (setq flyover--settings-migrated t)))
 
 (defcustom flyover-hide-checker-name t
   "Hide the checker name in the error message."
@@ -304,6 +316,20 @@ A value of 0 means the overlay appears on the same line as the error."
   :type 'integer
   :group 'flyover)
 
+(defcustom flyover-border-style 'none
+  "Border style for the overlay message box.
+Requires a Nerd Font to display correctly.
+
+Available styles:
+- `none': No border decorations
+- `pill': Pill/capsule style with rounded ends (default)
+- `arrow': Arrow/chevron style borders"
+  :type '(choice
+          (const :tag "No border" none)
+          (const :tag "Pill/rounded" pill)
+          (const :tag "Arrow/chevron" arrow))
+  :group 'flyover)
+
 (defcustom flyover-wrap-messages t
   "Whether to wrap long error messages across multiple lines.
 When non-nil, long messages will be displayed on multiple lines.
@@ -320,8 +346,9 @@ Only used when `flyover-wrap-messages' is non-nil."
 (defvar-local flyover--overlays nil
   "List of overlays used in the current buffer.")
 
-(defvar flyover--debounce-timer nil
-  "Timer used for debouncing error checks.")
+(defvar-local flyover--debounce-timer nil
+  "Timer used for debouncing error checks.
+Buffer-local to prevent cross-buffer interference.")
 
 ;; Color cache for performance optimization
 (defvar flyover--color-cache (make-hash-table :test 'equal)
@@ -363,19 +390,22 @@ CONTEXT provides operation context, and OPERATION is optional operation name."
 (defun flyover-get-arrow-type ()
   "Return the arrow character based on the selected style."
   (pcase flyover-virtual-line-type
-    ;; Basic styles (no arrow)
+    ;; No arrow
+    ((or 'no-arrow 'nil (pred null)) "")
+
+    ;; Basic styles (no arrow terminator)
     ('line-no-arrow "└──")
     ('curved-line-no-arrow "╰──")
     ('double-line-no-arrow "╚══")
     ('bold-line-no-arrow "┗━━")
     ('dotted-line-no-arrow "└┈┈")
-    
+
     ;; Straight variants with arrow
     ('straight-arrow "└──►")
     ('double-line-arrow "╚══►")
     ('bold-arrow "┗━━►")
     ('dotted-arrow "└┈┈►")
-    
+
     ;; Curved variants with arrow
     ('curved-arrow "╰──►")
     ('curved-bold-arrow "╰━━►")
@@ -384,10 +414,9 @@ CONTEXT provides operation context, and OPERATION is optional operation name."
 
     ('arrow "──►")
     ('line "──")
-    
-    ;; Default/fallback
-    ('no-arrow "")
-    (_ "→")))
+
+    ;; Default fallback - empty string
+    (_ "")))
 
 (defun flyover-get-arrow ()
   "Return the arrow character based on the selected style."
@@ -396,6 +425,65 @@ CONTEXT provides operation context, and OPERATION is optional operation name."
     (if (not flyover-virtual-line-icon)
         (flyover-get-arrow-type)
       flyover-virtual-line-icon)))
+
+(defcustom flyover-border-left-char (string ?\ue0b6)
+  "Left border character for pill/arrow style.
+Default is nerd-font left semicircle (U+E0B6)."
+  :type 'string
+  :group 'flyover)
+
+(defcustom flyover-border-right-char (string ?\ue0b4)
+  "Right border character for pill/arrow style.
+Default is nerd-font right semicircle (U+E0B4)."
+  :type 'string
+  :group 'flyover)
+
+(defcustom flyover-arrow-left-char (string ?\ue0b2)
+  "Left arrow character for arrow style.
+Default is nerd-font left arrow (U+E0B2)."
+  :type 'string
+  :group 'flyover)
+
+(defcustom flyover-arrow-right-char (string ?\ue0b0)
+  "Right arrow character for arrow style.
+Default is nerd-font right arrow (U+E0B0)."
+  :type 'string
+  :group 'flyover)
+
+(defun flyover--get-border-chars ()
+  "Return border characters based on `flyover-border-style'.
+Returns a plist with :left and :right keys for the border characters."
+  (pcase flyover-border-style
+    ('pill
+     (list :left flyover-border-left-char
+           :right flyover-border-right-char))
+    ('arrow
+     (list :left flyover-arrow-left-char
+           :right flyover-arrow-right-char))
+    (_
+     '(:left "" :right ""))))
+
+(defun flyover--get-border-left (border-chars bg-color)
+  "Get the left border string with proper styling.
+BORDER-CHARS is from `flyover--get-border-chars'.
+BG-COLOR is the overlay background color."
+  (if (eq flyover-border-style 'none)
+      ""
+    (let ((left-char (plist-get border-chars :left)))
+      (if (or (null left-char) (string-empty-p left-char))
+          ""
+        (propertize left-char 'face `(:foreground ,bg-color))))))
+
+(defun flyover--get-border-right (border-chars bg-color)
+  "Get the right border string with proper styling.
+BORDER-CHARS is from `flyover--get-border-chars'.
+BG-COLOR is the overlay background color."
+  (if (eq flyover-border-style 'none)
+      ""
+    (let ((right-char (plist-get border-chars :right)))
+      (if (or (null right-char) (string-empty-p right-char))
+          ""
+        (propertize right-char 'face `(:foreground ,bg-color))))))
 
 (defun flyover--get-flymake-diagnostics ()
   "Get all current Flymake diagnostics for this buffer."
@@ -406,12 +494,12 @@ CONTEXT provides operation context, and OPERATION is optional operation name."
 (defun flyover--convert-flymake-diagnostic (diag)
   "Convert a Flymake DIAG to flyover-error format.
 Only converts diagnostics whose level is in `flyover-levels'."
-  (let* ((beg (flymake-diagnostic-beg diag))
-         (type (flymake-diagnostic-type diag))
-         (text (flymake-diagnostic-text diag))
-         (level (flyover--flymake-type-to-level type)))
-    ;; Only convert if the level is enabled
-    (when (memq level flyover-levels)
+  (when-let* ((beg (flymake-diagnostic-beg diag))
+              (type (flymake-diagnostic-type diag))
+              (text (flymake-diagnostic-text diag))
+              (level (flyover--flymake-type-to-level type)))
+    ;; Only convert if the level is enabled and beg is valid
+    (when (and (memq level flyover-levels) (integer-or-marker-p beg))
       (flyover-error-create
        :line (line-number-at-pos beg)
        :column (save-excursion
@@ -498,14 +586,16 @@ Returns a list of `flyover-error' structs."
           (message "Type: %S (class: %s)" type (type-of type)))))))
 
 (defun flyover--error-position-< (err1 err2)
-  "Compare two errors ERR1 and ERR2 by position."
+  "Compare two errors ERR1 and ERR2 by position.
+Returns nil if either error has invalid line numbers."
   (let ((line1 (flyover-error-line err1))
         (line2 (flyover-error-line err2))
         (col1 (flyover-error-column err1))
         (col2 (flyover-error-column err2)))
-    (or (< line1 line2)
-        (and (= line1 line2)
-             (< (or col1 0) (or col2 0))))))
+    (when (and line1 line2 (numberp line1) (numberp line2))
+      (or (< line1 line2)
+          (and (= line1 line2)
+               (< (or col1 0) (or col2 0)))))))
 
 (defun flyover--normalize-level (level)
   "Normalize LEVEL to a standard symbol (error, warning, or info).
@@ -588,24 +678,39 @@ ERROR is the optional original flycheck error object."
                (end (cdr region)))
           (save-excursion
             (goto-char (min end (point-max)))
-            (let* ((next-line-beg (if flyover-show-at-eol
-                                      end
-                                    (progn
-                                      (forward-line flyover-line-position-offset)
-                                      (line-beginning-position))))
+            (let* ((eol-pos (line-end-position))
+                   (newline-pos (min (1+ eol-pos) (point-max)))
+                   (overlay-pos (if flyover-show-at-eol
+                                    end
+                                  (progn
+                                    (forward-line flyover-line-position-offset)
+                                    (line-beginning-position))))
                    (face (flyover--get-face level)))
               (when (and (numberp beg)
                          (numberp end)
-                         (numberp next-line-beg)
+                         (numberp overlay-pos)
                          (> beg 0)
                          (> end 0)
-                         (> next-line-beg 0)
+                         (> overlay-pos 0)
                          (<= beg (point-max))
                          (<= end (point-max))
-                         (<= next-line-beg (point-max)))
-                (setq overlay (make-overlay beg next-line-beg))
-                (when (overlayp overlay)
-                  (flyover--configure-overlay overlay face msg beg error))))))
+                         (<= overlay-pos (point-max)))
+                ;; Create overlay over the newline character to replace it
+                ;; This helps with scrolling because we replace existing content
+                ;; rather than adding virtual lines
+                (if (and (not flyover-show-at-eol)
+                         (< eol-pos (point-max))
+                         (= (char-after eol-pos) ?\n))
+                    (progn
+                      (setq overlay (make-overlay eol-pos newline-pos))
+                      (overlay-put overlay 'flyover-beg beg)
+                      (when (overlayp overlay)
+                        (flyover--configure-overlay-display overlay face msg beg error)))
+                  ;; Fallback to zero-width overlay
+                  (setq overlay (make-overlay overlay-pos overlay-pos))
+                  (overlay-put overlay 'flyover-beg beg)
+                  (when (overlayp overlay)
+                    (flyover--configure-overlay overlay face msg beg error)))))))
       (error
        (flyover--handle-error 'overlay-creation ov-err "create-overlay"
                               (format "region=%S level=%S" region level))))
@@ -624,46 +729,61 @@ ERROR is the optional original flycheck error object."
     ;; Default to warning for any other type
     (_ 'flyover-warning)))
 
-(defun flyover--get-indicator (type color)
-  "Return the indicator string corresponding to the error TYPE COLOR."
-  (let* ((props (pcase type
-                  ('flyover-error
-                   (cons flyover-error-icon 'flyover-error))
-                  ('flyover-warning
-                   (cons flyover-warning-icon 'flyover-warning))
-                  ('flyover-info
-                   (cons flyover-info-icon 'flyover-info))
-                  (_
-                   (cons flyover-warning-icon 'flyover-warning))))
-         (icon (car props))
-         (face-name (cdr props))
-         (height (face-attribute face-name :height))
-         (bg (if flyover-use-theme-colors
-                 (pcase face-name
-                   ('flyover-error
-                    (flyover--get-theme-face-color 'error :foreground))
-                   ('flyover-warning
-                    (flyover--get-theme-face-color 'warning :foreground))
-                   ('flyover-info
-                    (flyover--get-theme-face-color 'success :foreground))
-                   (_ (face-attribute face-name :foreground)))
-               (face-attribute face-name :foreground)))
-         (bg-color (flyover--darken-color bg flyover-percent-darker)))
-    
-    (concat
-     ;; Left padding
-     (propertize " "
-                 'face `(:background ,bg-color, :height ,height)
-                 'display '(space :width flyover-icon-left-padding))
-     ;; Icon
-     (propertize icon
-                 'face `(:foreground ,color :background ,bg-color, :height ,height)
-                 'display '(raise -0.02))
-     ;; Right padding
-     (propertize " "
-                 'face `(:background ,bg-color, :height ,height)
-                 'display '(space :width flyover-icon-right-padding)))))
+(defun flyover--get-indicator (type color &optional override-bg)
+  "Return the indicator string corresponding to the error TYPE COLOR.
+If OVERRIDE-BG is provided, use it as the background color instead of
+calculating a darkened background. This is used for solid border styles.
+Returns empty string if `flyover-show-icon' is nil."
+  (if (not flyover-show-icon)
+      ""
+    (let* ((props (pcase type
+                    ('flyover-error
+                     (cons flyover-error-icon 'flyover-error))
+                    ('flyover-warning
+                     (cons flyover-warning-icon 'flyover-warning))
+                    ('flyover-info
+                     (cons flyover-info-icon 'flyover-info))
+                    (_
+                     (cons flyover-warning-icon 'flyover-warning))))
+           (icon (car props))
+           (face-name (cdr props))
+           (height (face-attribute face-name :height))
+           (bg (if flyover-use-theme-colors
+                   (pcase face-name
+                     ('flyover-error
+                      (flyover--get-theme-face-color 'error :foreground))
+                     ('flyover-warning
+                      (flyover--get-theme-face-color 'warning :foreground))
+                     ('flyover-info
+                      (flyover--get-theme-face-color 'success :foreground))
+                     (_ (face-attribute face-name :foreground)))
+                 (face-attribute face-name :foreground)))
+           ;; Use override-bg for solid border styles, otherwise darken
+           (bg-color (or override-bg
+                         (flyover--darken-color bg flyover-percent-darker))))
 
+      (concat
+       ;; Left padding
+       (propertize " "
+                   'face `(:background ,bg-color :height ,height)
+                   'display '(space :width flyover-icon-left-padding))
+       ;; Icon (no raise for better vertical centering)
+       (propertize icon
+                   'face `(:foreground ,color :background ,bg-color :height ,height))
+       ;; Right padding
+       (propertize " "
+                   'face `(:background ,bg-color :height ,height)
+                   'display '(space :width flyover-icon-right-padding))))))
+
+
+(defun flyover--get-overlay-error-line (overlay)
+  "Get the error line number for OVERLAY.
+Uses the stored flyover-error if available, otherwise falls back to overlay position."
+  (if-let* ((err (overlay-get overlay 'flyover-error))
+            (line (flyover-error-line err)))
+      line
+    (line-number-at-pos (or (overlay-get overlay 'flyover-beg)
+                            (overlay-start overlay)))))
 
 (defun flyover--calculate-overlay-priority (error)
   "Calculate overlay priority based on ERROR level and column position."
@@ -679,7 +799,9 @@ ERROR is the optional original flycheck error object."
 (defun flyover--setup-basic-overlay-properties (overlay error)
   "Set up basic properties for OVERLAY with ERROR."
   (overlay-put overlay 'flyover t)
-  (overlay-put overlay 'evaporate t)
+  ;; Don't use evaporate for zero-width overlays as they would disappear immediately
+  (unless (= (overlay-start overlay) (overlay-end overlay))
+    (overlay-put overlay 'evaporate t))
   (overlay-put overlay 'modification-hooks
                '(flyover--clear-overlay-on-modification))
   (overlay-put overlay 'priority (flyover--calculate-overlay-priority error))
@@ -688,11 +810,13 @@ ERROR is the optional original flycheck error object."
 
 (defun flyover--create-overlay-display-components (face error msg)
   "Create display components for overlay with FACE, ERROR, and MSG.
-Returns a plist with :fg-color, :bg-color, :tinted-fg, :face-with-colors,
-:indicator, :virtual-line, and :marked-string."
+Returns a plist with :fg-color, :bg-color, :icon-bg-color, :tinted-fg,
+:face-with-colors, :indicator, :virtual-line, and :marked-string."
   (let* ((colors (flyover--get-face-colors (flyover--normalize-level (flyover-error-level error))))
          (fg-color (car colors))
          (bg-color (cdr colors))
+         ;; Icon background is darker version of foreground
+         (icon-bg-color (flyover--darken-color fg-color flyover-percent-darker))
          (tinted-fg (if flyover-text-tint
                         (flyover--tint-color
                          fg-color
@@ -717,6 +841,7 @@ Returns a plist with :fg-color, :bg-color, :tinted-fg, :face-with-colors,
                                               :background ,bg-color))))
     (list :fg-color fg-color
           :bg-color bg-color
+          :icon-bg-color icon-bg-color
           :tinted-fg tinted-fg
           :face-with-colors face-with-colors
           :indicator indicator
@@ -736,58 +861,83 @@ Returns a plist with :fg-color, :bg-color, :tinted-fg, :face-with-colors,
          (virtual-line (plist-get components :virtual-line))
          (face-with-colors (plist-get components :face-with-colors))
          (bg-color (plist-get components :bg-color))
+         (icon-bg-color (plist-get components :icon-bg-color))
+         (border-chars (flyover--get-border-chars))
+         ;; Left border uses icon background (or message bg if icon disabled)
+         (left-border-color (if flyover-show-icon icon-bg-color bg-color))
+         (left-border (flyover--get-border-left border-chars left-border-color))
+         (right-border (flyover--get-border-right border-chars bg-color))
          (wrapped-lines (flyover--wrap-message msg flyover-max-line-length))
          (overlay-string (if flyover-show-at-eol
-                             (concat " " virtual-line indicator
-                                     (flyover--mark-all-symbols
-                                      :input (propertize (concat " " (car wrapped-lines) " ")
-                                                         'face face-with-colors)
-                                      :regex flyover-regex-mark-quotes
-                                      :property `(:inherit flyover-marker
-                                                           :background ,bg-color)))
+                             (let ((msg-content (flyover--mark-all-symbols
+                                                 :input (propertize (concat " " (car wrapped-lines) " ")
+                                                                    'face face-with-colors)
+                                                 :regex flyover-regex-mark-quotes
+                                                 :property `(:inherit flyover-marker
+                                                                      :background ,bg-color))))
+                               ;; Structure: virtual-line + left-border + indicator + message + right-border
+                               (concat " " virtual-line left-border indicator msg-content right-border))
                            (flyover--create-multiline-overlay-string
                             (if is-empty-line 0 col-pos) virtual-line indicator
-                            wrapped-lines face-with-colors bg-color))))
+                            wrapped-lines face-with-colors bg-color icon-bg-color))))
     (if flyover-show-at-eol
         overlay-string
       (concat overlay-string "\n"))))
 
-(defun flyover--create-multiline-overlay-string (col-pos virtual-line indicator lines face-with-colors bg-color)
+(defun flyover--create-multiline-overlay-string (col-pos virtual-line indicator lines face-with-colors bg-color icon-bg-color)
   "Create multiline overlay string for LINES.
 COL-POS is the column position, VIRTUAL-LINE is the line indicator,
 INDICATOR is the error/warning icon, LINES are the wrapped message lines,
-FACE-WITH-COLORS is the face for text, and BG-COLOR is the background color."
+FACE-WITH-COLORS is the face for text, BG-COLOR is the message background,
+ICON-BG-COLOR is the icon background (used for left border)."
   (when flyover-debug
     (message "Debug multiline overlay-string: starting with col-pos=%S lines=%S" col-pos lines))
   (let* ((spaces (if (and (not flyover-show-at-eol) col-pos)
                      (make-string col-pos ?\s)
                    ""))
-         (first-line (car lines))
-         (remaining-lines (cdr lines))
-         (first-line-string (concat spaces
-                                    virtual-line
-                                    indicator
-                                    (flyover--mark-all-symbols
-                                     :input (propertize (concat " " first-line " ")
-                                                        'face face-with-colors)
-                                     :regex flyover-regex-mark-quotes
-                                     :property `(:inherit flyover-marker
-                                                          :background ,bg-color))))
-         (continuation-lines (mapcar (lambda (line)
-                                       (concat spaces
-                                               (make-string (+ (length virtual-line)
-                                                               (length indicator)) ?\s)
-                                               
-                                               (flyover--mark-all-symbols
-                                                :input (propertize (concat " " line " ")
-                                                                   'face face-with-colors)
-                                                :regex flyover-regex-mark-quotes
-                                                :property `(:inherit flyover-marker
-                                                                     :background ,bg-color))))
-                                     remaining-lines))
-         (all-lines (cons first-line-string continuation-lines))
-         (result-string (string-join all-lines "\n")))
-    
+         (border-chars (flyover--get-border-chars))
+         ;; Left border uses icon background (or message bg if icon disabled)
+         (left-border-color (if flyover-show-icon icon-bg-color bg-color))
+         (left-border (flyover--get-border-left border-chars left-border-color))
+         (right-border (flyover--get-border-right border-chars bg-color))
+         (virtual-line-len (length virtual-line))
+         (indicator-len (length indicator))
+         ;; Account for left border width in padding
+         (left-border-len (length left-border))
+         (padding-width (+ virtual-line-len left-border-len indicator-len))
+         (total-lines (length lines))
+         (result-lines
+          (cl-loop for line in lines
+                   for idx from 0
+                   for is-first = (= idx 0)
+                   for is-last = (= idx (1- total-lines))
+                   for is-single = (= total-lines 1)
+                   for line-content = (flyover--mark-all-symbols
+                                       :input (propertize (concat " " line " ")
+                                                          'face face-with-colors)
+                                       :regex flyover-regex-mark-quotes
+                                       :property `(:inherit flyover-marker
+                                                            :background ,bg-color))
+                   ;; Structure for multiline:
+                   ;; First line: left-border + indicator + message
+                   ;; Middle lines: padding + message
+                   ;; Last line: padding + message + right-border
+                   ;; Single line: left-border + indicator + message + right-border
+                   collect (cond
+                            ;; Single line - both borders
+                            (is-single
+                             (concat spaces virtual-line left-border indicator line-content right-border))
+                            ;; First line of multiline - only left border
+                            (is-first
+                             (concat spaces virtual-line left-border indicator line-content))
+                            ;; Last line of multiline - only right border
+                            (is-last
+                             (concat spaces (make-string padding-width ?\s) line-content right-border))
+                            ;; Middle lines - no borders
+                            (t
+                             (concat spaces (make-string padding-width ?\s) line-content)))))
+         (result-string (string-join result-lines "\n")))
+
     (when flyover-debug
       (message "Debug multiline overlay-string: created string successfully"))
     (flyover--mark-all-symbols
@@ -810,36 +960,28 @@ FACE-WITH-COLORS is the face for text, and BG-COLOR is the background color."
      (flyover--handle-error 'overlay-configuration configure-err
                             "configure-overlay" (format "beg=%S" beg)))))
 
+(defun flyover--configure-overlay-display (overlay face msg beg error)
+  "Configure OVERLAY using display property for better scroll behavior.
+FACE is the face to use, MSG is the message, BEG is the start position,
+ERROR is the original error object."
+  (condition-case configure-err
+      (when (overlayp overlay)
+        (flyover--setup-basic-overlay-properties overlay error)
+        (let* ((components (flyover--create-overlay-display-components face error msg))
+               (final-string (flyover--build-final-overlay-string components error msg)))
+          ;; Use display property to replace the newline with our content
+          ;; This replaces the newline character with: newline + overlay content
+          (overlay-put overlay 'display
+                       (propertize (concat "\n" final-string)
+                                   'rear-nonsticky t
+                                   'cursor-sensor-functions nil))))
+    (error
+     (flyover--handle-error 'overlay-configuration configure-err
+                            "configure-overlay-display" (format "beg=%S" beg)))))
+
 (defun flyover--clear-overlay-on-modification (overlay &rest _)
   "Clear OVERLAY when the buffer is modified."
   (delete-overlay overlay))
-
-(defun flyover--create-overlay-string (col-pos virtual-line indicator marked-string bg-color)
-  "Create the overlay string.
-COL-POS is the column position.
-VIRTUAL-LINE is the line indicator.
-INDICATOR is the error/warning icon.
-MARKED-STRING is the message with marked symbols.
-BG-COLOR is the background color."
-  (when flyover-debug
-    (message "Debug overlay-string: starting with col-pos=%S" col-pos))
-  (let* ((spaces (if (and (not flyover-show-at-eol) col-pos)
-                     (make-string col-pos ?\s)
-                   ""))
-         (result-string
-          (if flyover-show-at-eol
-              (concat " " indicator marked-string)
-            (concat spaces
-                   virtual-line
-                   indicator
-                   marked-string))))
-
-    (when flyover-debug
-      (message "Debug overlay-string: created string successfully"))
-    (flyover--mark-all-symbols
-     :input result-string
-     :regex flyover-regex-mark-parens
-     :property `(:inherit flyover-marker :background ,bg-color))))
 
 (defun flyover-replace-curly-quotes (text)
   "Replace curly quotes with straight quotes in TEXT."
@@ -869,8 +1011,7 @@ BG-COLOR is the background color."
                     (overlays-at pos))))
 
 (defun flyover--remove-checker-name (msg)
-  "Remove checker name prefix from (as MSG).
-If it appears at the start.
+  "Remove checker name prefix from MSG if it appears at the start.
 Ignores colons that appear within quotes or parentheses."
   (when flyover-hide-checker-name
     (let ((case-fold-search nil))
@@ -1071,7 +1212,7 @@ STATUS is the new flycheck status."
                             #'flyover--on-flycheck-status-change))
   (when (memq 'flymake flyover-checkers)
     (flyover--enable-flymake-hooks))
-  
+
   (flyover--safe-add-hook 'after-change-functions
                           #'flyover--handle-buffer-changes)
   ;; Add post-command-hook when we need to track cursor position
@@ -1080,6 +1221,8 @@ STATUS is the new flycheck status."
                                      hide-at-exact-position))
     (flyover--safe-add-hook 'post-command-hook
                             #'flyover--maybe-display-errors-debounced))
+  ;; Disable auto-window-vscroll to prevent scroll issues with overlays
+  (setq-local auto-window-vscroll nil)
   ;; Force initial display of existing errors
   (flyover--maybe-display-errors))
 
@@ -1094,7 +1237,7 @@ STATUS is the new flycheck status."
                                         #'flyover--on-flycheck-status-change))
   (when (memq 'flymake flyover-checkers)
     (flyover--disable-flymake-hooks))
-  
+
   (flyover--safe-remove-hook 'after-change-functions
                                       #'flyover--handle-buffer-changes)
   ;; Remove post-command-hook if it was added
@@ -1149,19 +1292,19 @@ STATUS is the new flycheck status."
          (flyover--display-errors)
          (dolist (ov flyover--overlays)
            (when (and (overlayp ov)
-                      (= (line-number-at-pos (overlay-start ov)) current-line))
+                      (= (flyover--get-overlay-error-line ov) current-line))
              (push ov to-delete)))
          ;; Delete collected overlays
          (dolist (ov to-delete)
            (delete-overlay ov)
            (setq flyover--overlays (delq ov flyover--overlays))))
-        
+
         ;; Hide errors at exact cursor position
         ('hide-at-exact-position
          (flyover--display-errors)
          (dolist (ov flyover--overlays)
            (when (and (overlayp ov)
-                      (= (line-number-at-pos (overlay-start ov)) current-line)
+                      (= (flyover--get-overlay-error-line ov) current-line)
                       (overlay-get ov 'flyover-error)
                       (let ((error (overlay-get ov 'flyover-error)))
                         (= (or (flyover-error-column error) 0)
@@ -1200,7 +1343,7 @@ BEG and END mark the beginning and end of the changed region."
               (when (and ov
                          (overlayp ov)
                          (overlay-buffer ov)  ; Check if overlay is still valid
-                         (let ((ov-line (line-number-at-pos (overlay-start ov))))
+                         (let ((ov-line (flyover--get-overlay-error-line ov)))
                            (and (>= ov-line beg-line) (<= ov-line end-line))))
                 (delete-overlay ov)))
             ;; Update our list of valid overlays
