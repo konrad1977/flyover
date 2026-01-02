@@ -52,6 +52,10 @@ A modern, aesthetic overlay display for *Flycheck* and *Flymake* in Emacs. Flyov
   (flyover-warning-icon " ")
   (flyover-error-icon " ")
 
+  ;; Border styles: none, pill, arrow, slant, slant-inv, flames, pixels
+  (flyover-border-style 'pill)
+  (flyover-border-match-icon t)
+
   ;; Display settings
   (flyover-hide-checker-name t)
   (flyover-show-virtual-line t)
@@ -266,29 +270,50 @@ You can customize the appearance of the error indicators using various line and 
 
 ### Border Styles
 
-You can customize the border style of the overlay message box. This requires a Nerd Font to display correctly.
+You can customize the border style of the overlay message box. Built-in styles require a Nerd Font to display correctly.
 
 ```elisp
-;;; Border style options: 'none, 'pill, or 'arrow
-(setq flyover-border-style 'pill)
+;;; Border style options
+(setq flyover-border-style 'pill)  ; none, pill, arrow, slant, slant-inv, flames, pixels
 
 ;;; Toggle icon visibility (default: t)
 (setq flyover-show-icon t)
 
-;;; Customize border characters for pill style
-(setq flyover-border-left-char (string ?\ue0b6))  ; Left semicircle
-(setq flyover-border-right-char (string ?\ue0b4)) ; Right semicircle
-
-;;; Customize border characters for arrow style
-(setq flyover-arrow-left-char (string ?\ue0b2))   ; Left arrow
-(setq flyover-arrow-right-char (string ?\ue0b0))  ; Right arrow
+;;; Match left border color with icon background (default: t)
+;;; When nil, left border uses message background color instead
+(setq flyover-border-match-icon t)
 ```
 
-| Style | Description |
-|-------|-------------|
-| `none` | No border decorations |
-| `pill` | Pill/capsule style with rounded ends |
-| `arrow` | Arrow/chevron style borders |
+#### Built-in Styles
+
+| Style | Left | Right | Description |
+|-------|------|-------|-------------|
+| `none` | | | No border decorations |
+| `pill` | `` | `` | Rounded semicircle ends |
+| `arrow` | `` | `` | Chevron arrow style |
+| `slant` | `` | `` | Slanted borders |
+| `slant-inv` | `` | `` | Inverted slant |
+| `flames` | `` | `` | Flame style |
+| `pixels` | `` | `` | Pixelated style |
+
+#### Custom Styles
+
+You can define custom border styles by adding entries to `flyover-border-chars`:
+
+```elisp
+;;; The alist maps style names to (LEFT . RIGHT) character pairs
+(setq flyover-border-chars
+      '((pill      . ("" . ""))
+        (arrow     . ("" . ""))
+        (slant     . ("" . ""))
+        (slant-inv . ("" . ""))
+        (flames    . ("" . ""))
+        (pixels    . ("" . ""))))
+
+;;; Add a custom style
+(add-to-list 'flyover-border-chars '(brackets . ("[" . "]")))
+(setq flyover-border-style 'brackets)
+```
 
 <p align="center">
   <img src="https://github.com/konrad1977/flycheck-overlay/blob/main/screenshots/border_pill.png" alt="Pill border style"/>

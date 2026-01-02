@@ -160,6 +160,14 @@ When nil, the icon area is completely hidden."
   :type 'boolean
   :group 'flyover)
 
+(defcustom flyover-border-match-icon t
+  "Whether the left border should match the icon background color.
+When non-nil and `flyover-show-icon' is enabled, the left border
+uses the same color as the icon background for a seamless look.
+When nil, the left border uses the message background color instead."
+  :type 'boolean
+  :group 'flyover)
+
 (defcustom flyover-percent-darker 50
   "Icon background percent darker.
 Based on foreground color"
@@ -318,16 +326,27 @@ A value of 0 means the overlay appears on the same line as the error."
 
 (defcustom flyover-border-style 'none
   "Border style for the overlay message box.
-Requires a Nerd Font to display correctly.
+Requires a Nerd Font for built-in styles.
 
-Available styles:
+Built-in styles:
 - `none': No border decorations
-- `pill': Pill/capsule style with rounded ends (default)
-- `arrow': Arrow/chevron style borders"
+- `pill': Pill/capsule style with rounded ends
+- `arrow': Arrow/chevron style borders
+- `slant': Slanted borders
+- `slant-inv': Inverted slanted borders
+- `flames': Flame style borders
+- `pixels': Pixelated borders
+
+Custom styles can be added to `flyover-border-chars' alist."
   :type '(choice
           (const :tag "No border" none)
           (const :tag "Pill/rounded" pill)
-          (const :tag "Arrow/chevron" arrow))
+          (const :tag "Arrow/chevron" arrow)
+          (const :tag "Slant" slant)
+          (const :tag "Slant inverted" slant-inv)
+          (const :tag "Flames" flames)
+          (const :tag "Pixels" pixels)
+          (symbol :tag "Custom style"))
   :group 'flyover)
 
 (defcustom flyover-wrap-messages t
@@ -426,42 +445,37 @@ CONTEXT provides operation context, and OPERATION is optional operation name."
         (flyover-get-arrow-type)
       flyover-virtual-line-icon)))
 
-(defcustom flyover-border-left-char (string ?\ue0b6)
-  "Left border character for pill/arrow style.
-Default is nerd-font left semicircle (U+E0B6)."
-  :type 'string
-  :group 'flyover)
+(defcustom flyover-border-chars
+  `((pill      . (,(string ?\ue0b6) . ,(string ?\ue0b4)))
+    (arrow     . (,(string ?\ue0b2) . ,(string ?\ue0b0)))
+    (slant     . (,(string ?\ue0be) . ,(string ?\ue0bc)))
+    (slant-inv . (,(string ?\ue0ba) . ,(string ?\ue0b8)))
+    (flames    . (,(string ?\ue0c2) . ,(string ?\ue0c0)))
+    (pixels    . (,(string ?\ue0c6) . ,(string ?\ue0c4))))
+  "Alist mapping border styles to their (LEFT . RIGHT) characters.
+Each entry is (STYLE . (LEFT-CHAR . RIGHT-CHAR)).
+Default styles use nerd-font powerline characters:
+  - pill:      U+E0B6, U+E0B4 (rounded semicircles)
+  - arrow:     U+E0B2, U+E0B0 (chevron arrows)
+  - slant:     U+E0BE, U+E0BC (slanted)
+  - slant-inv: U+E0BA, U+E0B8 (slanted inverted)
+  - flames:    U+E0C2, U+E0C0 (flame style)
+  - pixels:    U+E0C6, U+E0C4 (pixelated)
 
-(defcustom flyover-border-right-char (string ?\ue0b4)
-  "Right border character for pill/arrow style.
-Default is nerd-font right semicircle (U+E0B4)."
-  :type 'string
-  :group 'flyover)
-
-(defcustom flyover-arrow-left-char (string ?\ue0b2)
-  "Left arrow character for arrow style.
-Default is nerd-font left arrow (U+E0B2)."
-  :type 'string
-  :group 'flyover)
-
-(defcustom flyover-arrow-right-char (string ?\ue0b0)
-  "Right arrow character for arrow style.
-Default is nerd-font right arrow (U+E0B0)."
-  :type 'string
+You can add custom styles by adding entries to this alist:
+  (add-to-list \\='flyover-border-chars \\='(custom . (\"[\" . \"]\")))
+  (setq flyover-border-style \\='custom)"
+  :type '(alist :key-type symbol
+                :value-type (cons string string))
   :group 'flyover)
 
 (defun flyover--get-border-chars ()
   "Return border characters based on `flyover-border-style'.
-Returns a plist with :left and :right keys for the border characters."
-  (pcase flyover-border-style
-    ('pill
-     (list :left flyover-border-left-char
-           :right flyover-border-right-char))
-    ('arrow
-     (list :left flyover-arrow-left-char
-           :right flyover-arrow-right-char))
-    (_
-     '(:left "" :right ""))))
+Returns a plist with :left and :right keys for the border characters.
+Looks up the style in `flyover-border-chars' alist."
+  (if-let ((chars (alist-get flyover-border-style flyover-border-chars)))
+      (list :left (car chars) :right (cdr chars))
+    '(:left "" :right "")))
 
 (defun flyover--get-border-left (border-chars bg-color)
   "Get the left border string with proper styling.
@@ -516,7 +530,9 @@ Only converts diagnostics whose level is in `flyover-levels'."
       (when (memq level flyover-levels)
         (flyover-error-create
          :line (flycheck-error-line err)
-         :column (flycheck-error-column err)
+         ;; Flycheck columns are 1-based, convert to 0-based for consistency
+         :column (when-let ((col (flycheck-error-column err)))
+                   (max 0 (1- col)))
          :level level
          :message (flycheck-error-message err)
          :id (condition-case nil
@@ -863,8 +879,9 @@ Returns a plist with :fg-color, :bg-color, :icon-bg-color, :tinted-fg,
          (bg-color (plist-get components :bg-color))
          (icon-bg-color (plist-get components :icon-bg-color))
          (border-chars (flyover--get-border-chars))
-         ;; Left border uses icon background (or message bg if icon disabled)
-         (left-border-color (if flyover-show-icon icon-bg-color bg-color))
+         ;; Left border uses icon background if both icon and matching are enabled
+         (left-border-color (if (and flyover-show-icon flyover-border-match-icon)
+                                icon-bg-color bg-color))
          (left-border (flyover--get-border-left border-chars left-border-color))
          (right-border (flyover--get-border-right border-chars bg-color))
          (wrapped-lines (flyover--wrap-message msg flyover-max-line-length))
@@ -896,8 +913,9 @@ ICON-BG-COLOR is the icon background (used for left border)."
                      (make-string col-pos ?\s)
                    ""))
          (border-chars (flyover--get-border-chars))
-         ;; Left border uses icon background (or message bg if icon disabled)
-         (left-border-color (if flyover-show-icon icon-bg-color bg-color))
+         ;; Left border uses icon background if both icon and matching are enabled
+         (left-border-color (if (and flyover-show-icon flyover-border-match-icon)
+                                icon-bg-color bg-color))
          (left-border (flyover--get-border-left border-chars left-border-color))
          (right-border (flyover--get-border-right border-chars bg-color))
          (virtual-line-len (length virtual-line))
