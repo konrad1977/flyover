@@ -67,7 +67,11 @@ A modern, aesthetic overlay display for *Flycheck* and *Flymake* in Emacs. Flyov
   (flyover-max-line-length 80)
 
   ;; Performance
-  (flyover-debounce-interval 0.2))
+  (flyover-debounce-interval 0.2)
+  (flyover-cursor-debounce-interval 0.3)
+
+  ;; Display mode (controls cursor-based visibility)
+  (flyover-display-mode 'always))
 ```
 
 ### Manual Installation
@@ -162,7 +166,12 @@ Once enabled, `flyover` will automatically display error messages as overlays be
 
 ```elisp
 ;; Time in seconds to wait before checking and displaying errors after a change
-(setq flyover-debounce-interval 0.2) 
+(setq flyover-debounce-interval 0.2)
+
+;; Time in seconds to wait before updating overlays after cursor movement
+;; Used in cursor-position-dependent display modes (show-only-on-same-line, etc.)
+;; A slightly longer interval reduces visual distraction during rapid navigation
+(setq flyover-cursor-debounce-interval 0.3)
 ```
 
 ### Positioning settings
@@ -245,9 +254,6 @@ You can customize the appearance of the error indicators using various line and 
 ;;; show at end of the line instead.
 (setq flyover-show-at-eol t)
 
-;;; Hide overlay when cursor is at same line, good for show-at-eol.
-(setq flyover-hide-when-cursor-is-on-same-line t)
-
 ;;; Show an arrow (or icon of your choice) before the error to highlight the error a bit more.
 (setq flyover-show-virtual-line t)
 
@@ -256,6 +262,35 @@ You can customize the appearance of the error indicators using various line and 
 ;;; Useful for looking up error codes or adding suppression comments
 (setq flyover-show-error-id t)
 ```
+
+### Display Mode
+
+Control when overlays are shown based on cursor position using `flyover-display-mode`:
+
+```elisp
+;; Always show all error overlays (default)
+(setq flyover-display-mode 'always)
+
+;; Hide overlays when cursor is on the same line as the error
+;; Good for show-at-eol mode to avoid visual clutter while editing
+(setq flyover-display-mode 'hide-on-same-line)
+
+;; Hide overlays only when cursor is at the exact error position (line + column)
+(setq flyover-display-mode 'hide-at-exact-position)
+
+;; Only show overlays for errors on the current line
+;; Useful for focusing on one error at a time
+(setq flyover-display-mode 'show-only-on-same-line)
+```
+
+| Mode | Description |
+|------|-------------|
+| `always` | Always show all error overlays (default) |
+| `hide-on-same-line` | Hide overlays when cursor is on the same line |
+| `hide-at-exact-position` | Hide overlays only at exact error position |
+| `show-only-on-same-line` | Only show errors on the current line |
+
+**Note:** The old variables `flyover-hide-when-cursor-is-on-same-line` and `flyover-show-only-when-on-same-line` are deprecated. Use `flyover-display-mode` instead.
 
 <p align="center">
   <img src="https://github.com/konrad1977/flycheck-overlay/blob/main/screenshots/flycheck_hide_overlay_cursor.gif" alt="Gif of showing hide cursor is on same line"/>

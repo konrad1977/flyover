@@ -1,7 +1,7 @@
 ;;; flyover.el --- Display Flycheck and Flymake errors with overlays -*- lexical-binding: t -*-
 
 ;; Author: Mikael Konradsson <mikael.konradsson@outlook.com>
-;; Version: 0.9.5
+;; Version: 0.9.6
 ;; Package-Requires: ((emacs "27.1") (flymake "1.0"))
 ;; Keywords: convenience, tools, flycheck, flymake
 ;; URL: https://github.com/konrad1977/flyover
@@ -287,6 +287,15 @@ adding suppression comments."
   :type 'number
   :group 'flyover)
 
+(defcustom flyover-cursor-debounce-interval 0.3
+  "Time in seconds to wait before updating overlays after cursor movement.
+Used only in cursor-position-dependent display modes like
+`show-only-on-same-line', `hide-on-same-line', and `hide-at-exact-position'.
+A slightly longer interval than `flyover-debounce-interval' helps reduce
+visual distraction during rapid navigation."
+  :type 'number
+  :group 'flyover)
+
 (defcustom flyover-virtual-line-type 'curved-dotted-arrow
   "Arrow used to point to the error.
 Provides various line styles including
@@ -369,9 +378,20 @@ Only used when `flyover-wrap-messages' is non-nil."
   "Timer used for debouncing error checks.
 Buffer-local to prevent cross-buffer interference.")
 
+(defvar-local flyover--last-cursor-line nil
+  "The line number where cursor was at last display update.
+Used to avoid unnecessary overlay rebuilds in cursor-dependent modes.")
+
+(defvar-local flyover--cursor-debounce-timer nil
+  "Timer used for debouncing cursor movement updates.
+Separate from `flyover--debounce-timer' to allow different intervals.")
+
 ;; Color cache for performance optimization
 (defvar flyover--color-cache (make-hash-table :test 'equal)
   "Cache for computed colors to avoid repeated calculations.")
+
+(defvar flyover--theme-hook-installed nil
+  "Non-nil if the theme change hook has been installed.")
 
 ;; Priority constants
 (defconst flyover--error-priority 3000
@@ -815,9 +835,10 @@ Uses the stored flyover-error if available, otherwise falls back to overlay posi
 (defun flyover--setup-basic-overlay-properties (overlay error)
   "Set up basic properties for OVERLAY with ERROR."
   (overlay-put overlay 'flyover t)
-  ;; Don't use evaporate for zero-width overlays as they would disappear immediately
-  (unless (= (overlay-start overlay) (overlay-end overlay))
-    (overlay-put overlay 'evaporate t))
+  ;; Always set evaporate - overlays that become empty after buffer modifications
+  ;; should be cleaned up automatically. Zero-width overlays created intentionally
+  ;; won't be affected since evaporate only triggers when an overlay *becomes* empty.
+  (overlay-put overlay 'evaporate t)
   (overlay-put overlay 'modification-hooks
                '(flyover--clear-overlay-on-modification))
   (overlay-put overlay 'priority (flyover--calculate-overlay-priority error))
@@ -1081,20 +1102,24 @@ Returns a list of strings, each representing a line."
 
 (defun flyover--overlays-match-errors-p (overlays errors)
   "Check if current OVERLAYS match the given ERRORS.
-Returns t if they match (no need to recreate), nil if they differ."
+Returns t if they match (no need to recreate), nil if they differ.
+Uses O(n) hash-based comparison instead of O(n*m) nested loops."
   (and (= (length overlays) (length errors))
-       (cl-every (lambda (overlay)
-                   (when-let* ((overlay-error (overlay-get overlay 'flyover-error))
-                               (overlay-line (flyover-error-line overlay-error))
-                               (overlay-col (flyover-error-column overlay-error))
-                               (overlay-msg (flyover-error-message overlay-error)))
-                     (cl-some (lambda (err)
-                                (and (= (flyover-error-line err) overlay-line)
-                                     (= (or (flyover-error-column err) 0)
-                                        (or overlay-col 0))
-                                     (string= (flyover-error-message err) overlay-msg)))
-                              errors)))
-                 overlays)))
+       (let ((error-set (make-hash-table :test 'equal :size (max 1 (length errors)))))
+         ;; Build hash table of errors for O(1) lookup
+         (dolist (err errors)
+           (puthash (list (flyover-error-line err)
+                          (or (flyover-error-column err) 0)
+                          (flyover-error-message err))
+                    t error-set))
+         ;; Check all overlays exist in hash - O(n) total
+         (cl-every (lambda (overlay)
+                     (when-let* ((ov-err (overlay-get overlay 'flyover-error)))
+                       (gethash (list (flyover-error-line ov-err)
+                                      (or (flyover-error-column ov-err) 0)
+                                      (flyover-error-message ov-err))
+                                error-set)))
+                   overlays))))
 
 (defun flyover--display-errors (&optional errors)
   "Display ERRORS using overlays."
@@ -1163,7 +1188,8 @@ Returns t if they match (no need to recreate), nil if they differ."
 
 (defun flyover--safe-add-hook (hook function)
   "Safely add FUNCTION to HOOK if not already present."
-  (unless (memq function (symbol-value hook))
+  (when (and (boundp hook)
+             (not (memq function (symbol-value hook))))
     (add-hook hook function nil t)))
 
 (defun flyover--safe-remove-hook (hook function)
@@ -1200,8 +1226,12 @@ Returns t if they match (no need to recreate), nil if they differ."
                                #'flyover--maybe-display-errors-debounced))
   (flyover--safe-remove-hook 'after-save-hook
                              #'flyover--maybe-display-errors-debounced)
-  (advice-remove 'flymake--handle-report
-                 #'flyover--maybe-display-errors-debounced))
+  ;; Only remove advice if it was actually added
+  (when (and (fboundp 'flymake--handle-report)
+             (advice-member-p #'flyover--maybe-display-errors-debounced
+                              'flymake--handle-report))
+    (advice-remove 'flymake--handle-report
+                   #'flyover--maybe-display-errors-debounced)))
 
 (defun flyover--on-flycheck-status-change (status)
   "Handle Flycheck status changes to update overlays.
@@ -1221,6 +1251,14 @@ STATUS is the new flycheck status."
 (defun flyover--enable ()
   "Enable Flycheck/Flymake overlay mode."
   (flyover--ensure-flycheck)
+  ;; Install theme change hook once globally
+  (unless flyover--theme-hook-installed
+    (add-hook 'enable-theme-functions #'flyover--on-theme-change)
+    ;; Also hook into after-load-theme for older Emacs versions
+    (when (boundp 'after-load-theme-hook)
+      (add-hook 'after-load-theme-hook #'flyover--on-theme-change))
+    (setq flyover--theme-hook-installed t))
+
   (when (and (memq 'flycheck flyover-checkers)
              (featurep 'flycheck))
     (flyover--safe-add-hook 'flycheck-after-syntax-check-hook
@@ -1234,11 +1272,12 @@ STATUS is the new flycheck status."
   (flyover--safe-add-hook 'after-change-functions
                           #'flyover--handle-buffer-changes)
   ;; Add post-command-hook when we need to track cursor position
+  ;; Use the cursor-specific debounce function for smoother navigation
   (when (memq flyover-display-mode '(show-only-on-same-line
                                      hide-on-same-line
                                      hide-at-exact-position))
     (flyover--safe-add-hook 'post-command-hook
-                            #'flyover--maybe-display-errors-debounced))
+                            #'flyover--cursor-display-debounced))
   ;; Disable auto-window-vscroll to prevent scroll issues with overlays
   (setq-local auto-window-vscroll nil)
   ;; Force initial display of existing errors
@@ -1246,6 +1285,15 @@ STATUS is the new flycheck status."
 
 (defun flyover--disable ()
   "Disable Flycheck/Flymake overlay mode."
+  ;; Cancel any pending debounce timers to prevent orphaned timers
+  (when flyover--debounce-timer
+    (cancel-timer flyover--debounce-timer)
+    (setq flyover--debounce-timer nil))
+  (when flyover--cursor-debounce-timer
+    (cancel-timer flyover--cursor-debounce-timer)
+    (setq flyover--cursor-debounce-timer nil))
+  ;; Reset cursor tracking
+  (setq flyover--last-cursor-line nil)
   ;; Only remove flycheck hooks if flycheck is available
   (when (and (memq 'flycheck flyover-checkers)
              (featurep 'flycheck))
@@ -1258,7 +1306,9 @@ STATUS is the new flycheck status."
 
   (flyover--safe-remove-hook 'after-change-functions
                                       #'flyover--handle-buffer-changes)
-  ;; Remove post-command-hook if it was added
+  ;; Remove post-command-hook (try both debounce functions for safety)
+  (flyover--safe-remove-hook 'post-command-hook
+                              #'flyover--cursor-display-debounced)
   (flyover--safe-remove-hook 'post-command-hook
                               #'flyover--maybe-display-errors-debounced)
   (flyover--clear-overlays))
@@ -1279,27 +1329,31 @@ STATUS is the new flycheck status."
       (pcase flyover-display-mode
         ;; Show only errors on the current line
         ('show-only-on-same-line
-         ;; Always clear all overlays first
-         (flyover--clear-overlays)
-         (let ((all-errors (flyover--get-all-errors))
-               (current-line-errors))
-           (when flyover-debug
-             (message "DEBUG show-only-on-same-line: cursor at line %d, found %d total errors"
-                      current-line (length all-errors)))
-           ;; Filter to only show errors on current line
-           (dolist (err all-errors)
-             (when (and (flyover-error-p err)
-                        (= (flyover-error-line err) current-line))
-               (push err current-line-errors)
+         ;; Only rebuild overlays if cursor moved to a different line
+         (let ((line-changed (not (eql flyover--last-cursor-line current-line))))
+           (setq flyover--last-cursor-line current-line)
+           (when line-changed
+             ;; Clear all overlays first
+             (flyover--clear-overlays)
+             (let ((all-errors (flyover--get-all-errors))
+                   (current-line-errors))
                (when flyover-debug
-                 (message "DEBUG: Including error on line %d: %s"
-                          (flyover-error-line err) (flyover-error-message err)))))
-           (when flyover-debug
-             (message "DEBUG: Displaying %d errors for current line %d"
-                      (length current-line-errors) current-line))
-           ;; Only create overlays if there are errors on current line
-           (when current-line-errors
-             (flyover--display-errors current-line-errors))))
+                 (message "DEBUG show-only-on-same-line: cursor at line %d, found %d total errors"
+                          current-line (length all-errors)))
+               ;; Filter to only show errors on current line
+               (dolist (err all-errors)
+                 (when (and (flyover-error-p err)
+                            (= (flyover-error-line err) current-line))
+                   (push err current-line-errors)
+                   (when flyover-debug
+                     (message "DEBUG: Including error on line %d: %s"
+                              (flyover-error-line err) (flyover-error-message err)))))
+               (when flyover-debug
+                 (message "DEBUG: Displaying %d errors for current line %d"
+                          (length current-line-errors) current-line))
+               ;; Only create overlays if there are errors on current line
+               (when current-line-errors
+                 (flyover--display-errors current-line-errors))))))
         
         ;; Always show all errors (default)
         ('always
@@ -1343,8 +1397,29 @@ STATUS is the new flycheck status."
               (run-with-idle-timer flyover-debounce-interval nil
                                    #'flyover--maybe-display-errors)))
     (error
+     ;; Cancel timer before clearing reference to prevent orphaned timers
+     (when flyover--debounce-timer
+       (cancel-timer flyover--debounce-timer))
      (message "Error in debounced display: %S" err)
      (setq flyover--debounce-timer nil))))
+
+(defun flyover--cursor-display-debounced (&rest _)
+  "Debounced version of `flyover--maybe-display-errors' for cursor movement.
+Uses `flyover-cursor-debounce-interval' which is typically longer than
+`flyover-debounce-interval' to reduce visual noise during navigation."
+  (condition-case err
+      (progn
+        (when flyover--cursor-debounce-timer
+          (cancel-timer flyover--cursor-debounce-timer))
+        (setq flyover--cursor-debounce-timer
+              (run-with-idle-timer flyover-cursor-debounce-interval nil
+                                   #'flyover--maybe-display-errors)))
+    (error
+     ;; Cancel timer before clearing reference to prevent orphaned timers
+     (when flyover--cursor-debounce-timer
+       (cancel-timer flyover--cursor-debounce-timer))
+     (message "Error in cursor debounced display: %S" err)
+     (setq flyover--cursor-debounce-timer nil))))
 
 (defun flyover--handle-buffer-changes (beg end _len)
   "Handle buffer modifications by clearing overlays on the modified lines.
@@ -1355,21 +1430,23 @@ BEG and END mark the beginning and end of the changed region."
         ;; position-dependent modes handle their own overlay management
         (when (eq flyover-display-mode 'always)
           (let* ((beg-line (line-number-at-pos beg))
-                 (end-line (line-number-at-pos end)))
-            ;; Only remove overlays that are actually affected by the change
+                 (end-line (line-number-at-pos end))
+                 (remaining nil))
+            ;; Single pass: delete affected overlays and collect remaining valid ones
             (dolist (ov flyover--overlays)
-              (when (and ov
-                         (overlayp ov)
-                         (overlay-buffer ov)  ; Check if overlay is still valid
-                         (let ((ov-line (flyover--get-overlay-error-line ov)))
-                           (and (>= ov-line beg-line) (<= ov-line end-line))))
-                (delete-overlay ov)))
-            ;; Update our list of valid overlays
-            (setq flyover--overlays
-                  (cl-remove-if-not (lambda (ov)
-                                      (and (overlayp ov)
-                                           (overlay-buffer ov)))
-                                    flyover--overlays)))))
+              (cond
+               ;; Invalid overlay - skip
+               ((or (null ov) (not (overlayp ov)) (null (overlay-buffer ov)))
+                nil)
+               ;; Overlay in modified region - delete it
+               ((let ((ov-line (flyover--get-overlay-error-line ov)))
+                  (and ov-line (>= ov-line beg-line) (<= ov-line end-line)))
+                (delete-overlay ov))
+               ;; Valid overlay outside modified region - keep it
+               (t
+                (push ov remaining))))
+            ;; Update overlay list in one assignment
+            (setq flyover--overlays (nreverse remaining)))))
     (error
      (message "Error in flyover--handle-buffer-changes: %S" err))))
 
@@ -1381,6 +1458,18 @@ BEG and END mark the beginning and end of the changed region."
 (defun flyover--clear-color-cache ()
   "Clear the color cache."
   (clrhash flyover--color-cache))
+
+(defun flyover--on-theme-change (&rest _)
+  "Handle theme changes by clearing color cache and refreshing overlays.
+This ensures overlay colors match the new theme."
+  (flyover--clear-color-cache)
+  ;; Refresh overlays in all buffers where flyover-mode is active
+  (dolist (buf (buffer-list))
+    (when (buffer-live-p buf)
+      (with-current-buffer buf
+        (when flyover-mode
+          (flyover--clear-overlays)
+          (flyover--maybe-display-errors-debounced))))))
 
 (defun flyover--color-to-rgb (color)
   "Convert COLOR (hex or name) to RGB components."
