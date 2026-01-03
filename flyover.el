@@ -493,7 +493,7 @@ You can add custom styles by adding entries to this alist:
   "Return border characters based on `flyover-border-style'.
 Returns a plist with :left and :right keys for the border characters.
 Looks up the style in `flyover-border-chars' alist."
-  (if-let ((chars (alist-get flyover-border-style flyover-border-chars)))
+  (if-let* ((chars (alist-get flyover-border-style flyover-border-chars)))
       (list :left (car chars) :right (cdr chars))
     '(:left "" :right "")))
 
@@ -551,7 +551,7 @@ Only converts diagnostics whose level is in `flyover-levels'."
         (flyover-error-create
          :line (flycheck-error-line err)
          ;; Flycheck columns are 1-based, convert to 0-based for consistency
-         :column (when-let ((col (flycheck-error-column err)))
+         :column (when-let* ((col (flycheck-error-column err)))
                    (max 0 (1- col)))
          :level level
          :message (flycheck-error-message err)
@@ -768,7 +768,7 @@ ERROR is the optional original flycheck error object."
 (defun flyover--get-indicator (type color &optional override-bg)
   "Return the indicator string corresponding to the error TYPE COLOR.
 If OVERRIDE-BG is provided, use it as the background color instead of
-calculating a darkened background. This is used for solid border styles.
+calculating a darkened background.  This is used for solid border styles.
 Returns empty string if `flyover-show-icon' is nil."
   (if (not flyover-show-icon)
       ""
@@ -814,7 +814,8 @@ Returns empty string if `flyover-show-icon' is nil."
 
 (defun flyover--get-overlay-error-line (overlay)
   "Get the error line number for OVERLAY.
-Uses the stored flyover-error if available, otherwise falls back to overlay position."
+Uses the stored flyover-error if available,
+otherwise falls back to overlay position."
   (if-let* ((err (overlay-get overlay 'flyover-error))
             (line (flyover-error-line err)))
       line
