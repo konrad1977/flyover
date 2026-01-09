@@ -1,7 +1,7 @@
 ;;; flyover.el --- Display Flycheck and Flymake errors with overlays -*- lexical-binding: t -*-
 
 ;; Author: Mikael Konradsson <mikael.konradsson@outlook.com>
-;; Version: 0.9.6
+;; Version: 0.9.7
 ;; Package-Requires: ((emacs "27.1") (flymake "1.0"))
 ;; Keywords: convenience, tools, flycheck, flymake
 ;; URL: https://github.com/konrad1977/flyover
@@ -833,13 +833,16 @@ otherwise falls back to overlay position."
                            (_ flyover--warning-priority))))
     (- level-priority (or col-pos 0))))
 
-(defun flyover--setup-basic-overlay-properties (overlay error)
-  "Set up basic properties for OVERLAY with ERROR."
+(defun flyover--setup-basic-overlay-properties (overlay error &optional zero-width-p)
+  "Set up basic properties for OVERLAY with ERROR.
+If ZERO-WIDTH-P is non-nil, skip setting evaporate since zero-width
+overlays would be immediately deleted."
   (overlay-put overlay 'flyover t)
-  ;; Always set evaporate - overlays that become empty after buffer modifications
-  ;; should be cleaned up automatically. Zero-width overlays created intentionally
-  ;; won't be affected since evaporate only triggers when an overlay *becomes* empty.
-  (overlay-put overlay 'evaporate t)
+  ;; Only set evaporate for non-zero-width overlays.
+  ;; Zero-width overlays (used for EOL mode) would be immediately deleted
+  ;; if evaporate is set, since Emacs deletes empty overlays with this property.
+  (unless zero-width-p
+    (overlay-put overlay 'evaporate t))
   (overlay-put overlay 'modification-hooks
                '(flyover--clear-overlay-on-modification))
   (overlay-put overlay 'priority (flyover--calculate-overlay-priority error))
@@ -986,10 +989,12 @@ ICON-BG-COLOR is the icon background (used for left border)."
      :property `(:inherit flyover-marker :background ,bg-color))))
 
 (defun flyover--configure-overlay (overlay face msg beg error)
-  "Configure OVERLAY with FACE, MSG, BEG, and ERROR."
+  "Configure OVERLAY with FACE, MSG, BEG, and ERROR.
+This function is used for zero-width overlays (EOL mode and fallback cases)."
   (condition-case configure-err
       (when (overlayp overlay)
-        (flyover--setup-basic-overlay-properties overlay error)
+        ;; Pass t for zero-width-p to prevent evaporate from deleting the overlay
+        (flyover--setup-basic-overlay-properties overlay error t)
         (let* ((components (flyover--create-overlay-display-components face error msg))
                (final-string (flyover--build-final-overlay-string components error msg)))
           (overlay-put overlay 'after-string
