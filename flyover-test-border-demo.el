@@ -19,22 +19,40 @@
       (insert "==========================\n\n")
       (insert "Available styles in `flyover-border-chars`:\n\n")
 
-      ;; Show each style
-      (dolist (entry flyover-border-chars)
-        (let* ((style (car entry))
-               (chars (cdr entry))
-               (left (car chars))
-               (right (cdr chars))
-               (sample-bg "#3a3a5a")
-               (sample-fg "#ffffff"))
-          (insert (format "  %-12s  " style))
-          ;; Render a sample overlay
-          (insert (propertize left 'face `(:foreground ,sample-bg)))
-          (insert (propertize " Example error message " 'face `(:background ,sample-bg :foreground ,sample-fg)))
-          (insert (propertize right 'face `(:foreground ,sample-bg)))
-          (insert "\n")))
+      ;; Get theme colors for each level
+      (let* ((error-colors (flyover--get-face-colors 'error))
+             (warning-colors (flyover--get-face-colors 'warning))
+             (info-colors (flyover--get-face-colors 'info))
+             (levels `((error ,flyover-error-icon ,(car error-colors) ,(cdr error-colors))
+                       (warning ,flyover-warning-icon ,(car warning-colors) ,(cdr warning-colors))
+                       (info ,flyover-info-icon ,(car info-colors) ,(cdr info-colors)))))
 
-      (insert "\n")
+        ;; Show each style with all three levels
+        (dolist (entry flyover-border-chars)
+          (let* ((style (car entry))
+                 (chars (cdr entry))
+                 (left (car chars))
+                 (right (cdr chars)))
+            (insert (format "  %s\n" style))
+            (dolist (level levels)
+              (let* ((level-name (nth 0 level))
+                     (icon (nth 1 level))
+                     (fg-color (nth 2 level))
+                     (bg-color (nth 3 level))
+                     (icon-bg (flyover--tint-color fg-color 'darker 50))
+                     (tinted-fg (flyover--tint-color fg-color 'lighter 50)))
+                (insert "    ")
+                ;; Left border
+                (insert (propertize left 'face `(:foreground ,icon-bg)))
+                ;; Icon
+                (insert (propertize (format " %s " icon) 'face `(:foreground ,tinted-fg :background ,icon-bg)))
+                ;; Message
+                (insert (propertize (format " %s message " level-name) 'face `(:foreground ,tinted-fg :background ,bg-color)))
+                ;; Right border
+                (insert (propertize right 'face `(:foreground ,bg-color)))
+                (insert "\n")))
+            (insert "\n"))))
+
       (insert "Style 'none' shows no borders.\n\n")
       (insert "Usage:\n")
       (insert "  (setq flyover-border-style 'pill)   ; or arrow, slant, etc.\n\n")
