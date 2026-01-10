@@ -43,9 +43,16 @@ A modern, aesthetic overlay display for *Flycheck* and *Flymake* in Emacs. Flyov
   ;; Appearance
   (flyover-use-theme-colors t)
   (flyover-background-lightness 45)
-  (flyover-percent-darker 40)
+
+  ;; Text tinting
   (flyover-text-tint 'lighter)
   (flyover-text-tint-percent 50)
+
+  ;; Icon tinting (foreground and background)
+  (flyover-icon-tint 'lighter)
+  (flyover-icon-tint-percent 50)
+  (flyover-icon-background-tint 'darker)
+  (flyover-icon-background-tint-percent 50)
 
   ;; Icons
   (flyover-info-icon " ")
@@ -105,16 +112,36 @@ A modern, aesthetic overlay display for *Flycheck* and *Flymake* in Emacs. Flyov
 (setq flyover-use-theme-colors t)
 
 ;; Adjust background lightness (lower values = darker)
+;; Used when computing background from foreground color
 (setq flyover-background-lightness 45)
-
-;; Make icon background darker than foreground
-(setq flyover-percent-darker 40)
-
-(setq flyover-text-tint 'lighter) ;; or 'darker or nil
-
-;; "Percentage to lighten or darken the text when tinting is enabled."
-(setq flyover-text-tint-percent 50)
 ```
+
+### Color Tinting
+
+Flyover provides separate tinting controls for text, icon foreground, and icon background:
+
+```elisp
+;; Text tinting: 'lighter, 'darker, or nil (no tinting)
+(setq flyover-text-tint 'lighter)
+(setq flyover-text-tint-percent 50)  ; 0-100, use 0 to disable
+
+;; Icon foreground tinting
+(setq flyover-icon-tint 'lighter)
+(setq flyover-icon-tint-percent 50)
+
+;; Icon background tinting
+(setq flyover-icon-background-tint 'darker)
+(setq flyover-icon-background-tint-percent 50)
+```
+
+| Setting | Purpose | Default |
+|---------|---------|---------|
+| `flyover-text-tint` | Tint direction for message text | `'lighter` |
+| `flyover-text-tint-percent` | Amount of text tinting (0-100) | `50` |
+| `flyover-icon-tint` | Tint direction for icon | `'lighter` |
+| `flyover-icon-tint-percent` | Amount of icon tinting (0-100) | `50` |
+| `flyover-icon-background-tint` | Tint direction for icon background | `'darker` |
+| `flyover-icon-background-tint-percent` | Amount of icon bg tinting (0-100) | `50` |
 
 ### Customizing Faces
 
@@ -127,19 +154,40 @@ You can customize the appearance of overlays by modifying these faces:
        :foreground "#ea8faa"
        :height 0.9
        :weight normal)))
- 
+
  '(flyover-warning
    ((t :background "#331100"
        :foreground "#DCA561"
        :height 0.9
        :weight normal)))
- 
+
  '(flyover-info
    ((t :background "#374243"
        :foreground "#a8e3a9"
        :height 0.9
        :weight normal))))
 ```
+
+### Accessibility: Explicit Color Control
+
+For users with color vision deficiency or specific contrast requirements, you can set both `:foreground` and `:background` explicitly on flyover faces. When both are set, flyover uses your exact colors instead of computing the background:
+
+```elisp
+;; Example: High contrast colors for accessibility
+(set-face-attribute 'flyover-error nil
+                    :foreground "white"
+                    :background "red")
+
+(set-face-attribute 'flyover-warning nil
+                    :foreground "black"
+                    :background "yellow")
+
+(set-face-attribute 'flyover-info nil
+                    :foreground "black"
+                    :background "cyan")
+```
+
+Tinting still applies to explicit colors - set tint percent to 0 if you want exact colors without modification.
 
 ## Usage
 

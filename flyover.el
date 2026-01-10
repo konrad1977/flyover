@@ -1,7 +1,7 @@
 ;;; flyover.el --- Display Flycheck and Flymake errors with overlays -*- lexical-binding: t -*-
 
 ;; Author: Mikael Konradsson <mikael.konradsson@outlook.com>
-;; Version: 0.9.7
+;; Version: 0.9.8
 ;; Package-Requires: ((emacs "27.1") (flymake "1.0"))
 ;; Keywords: convenience, tools, flycheck, flymake
 ;; URL: https://github.com/konrad1977/flyover
@@ -96,7 +96,9 @@ This affects the font size of error, warning and info messages."
        :height ,flyover-base-height
        :weight normal))
   "Face used for error overlays.
-Inherits from the theme's error face."
+Inherits from the theme's error face.
+To override both text and background colors for accessibility, set both
+:foreground and :background attributes explicitly."
   :group 'flyover)
 
 (defface flyover-warning
@@ -104,7 +106,9 @@ Inherits from the theme's error face."
        :height ,flyover-base-height
        :weight normal))
   "Face used for warning overlays.
-Inherits from the theme's warning face."
+Inherits from the theme's warning face.
+To override both text and background colors for accessibility, set both
+:foreground and :background attributes explicitly."
   :group 'flyover)
 
 (defface flyover-info
@@ -112,7 +116,9 @@ Inherits from the theme's warning face."
        :height ,flyover-base-height
        :weight normal))
   "Face used for info overlays.
-Inherits from the theme's success face."
+Inherits from the theme's success face.
+To override both text and background colors for accessibility, set both
+:foreground and :background attributes explicitly."
   :group 'flyover)
 
 (defface flyover-marker
@@ -123,14 +129,38 @@ Inherits from the theme's success face."
   :group 'flyover)
 
 (defcustom flyover-text-tint 'lighter
-  "Tint type for text.  Possible values: nil, \='lighter, \='darker."
+  "Tint type for text.  Possible values: nil, \\='lighter/\\='light, \\='darker/\\='dark."
   :type '(choice (const :tag "No tinting" nil)
-                 (const :tag "Lighter than base color" lighter)
-                 (const :tag "Darker than base color" darker))
+                 (const :tag "Lighter" lighter)
+                 (const :tag "Darker" darker))
   :group 'flyover)
 
 (defcustom flyover-text-tint-percent 50
   "Percentage to lighten or darken the text when tinting is enabled."
+  :type 'integer
+  :group 'flyover)
+
+(defcustom flyover-icon-tint 'lighter
+  "Tint type for icon.  Possible values: nil, \\='lighter/\\='light, \\='darker/\\='dark."
+  :type '(choice (const :tag "No tinting" nil)
+                 (const :tag "Lighter" lighter)
+                 (const :tag "Darker" darker))
+  :group 'flyover)
+
+(defcustom flyover-icon-tint-percent 50
+  "Percentage to lighten or darken the icon when tinting is enabled."
+  :type 'integer
+  :group 'flyover)
+
+(defcustom flyover-icon-background-tint 'darker
+  "Tint type for icon background.  Possible values: nil, \\='lighter/\\='light, \\='darker/\\='dark."
+  :type '(choice (const :tag "No tinting" nil)
+                 (const :tag "Lighter" lighter)
+                 (const :tag "Darker" darker))
+  :group 'flyover)
+
+(defcustom flyover-icon-background-tint-percent 50
+  "Percentage to lighten or darken the icon background when tinting is enabled."
   :type 'integer
   :group 'flyover)
 
@@ -794,9 +824,11 @@ Returns empty string if `flyover-show-icon' is nil."
                       (flyover--get-theme-face-color 'success :foreground))
                      (_ (face-attribute face-name :foreground)))
                  (face-attribute face-name :foreground)))
-           ;; Use override-bg for solid border styles, otherwise darken
+           ;; Use override-bg for solid border styles, otherwise apply icon bg tinting
            (bg-color (or override-bg
-                         (flyover--darken-color bg flyover-percent-darker))))
+                         (if flyover-icon-background-tint
+                             (flyover--tint-color bg flyover-icon-background-tint flyover-icon-background-tint-percent)
+                           bg))))
 
       (concat
        ;; Left padding
@@ -856,18 +888,31 @@ Returns a plist with :fg-color, :bg-color, :icon-bg-color, :tinted-fg,
   (let* ((colors (flyover--get-face-colors (flyover--normalize-level (flyover-error-level error))))
          (fg-color (car colors))
          (bg-color (cdr colors))
-         ;; Icon background is darker version of foreground
-         (icon-bg-color (flyover--darken-color fg-color flyover-percent-darker))
+         ;; Icon background tinting
+         (icon-bg-color (if flyover-icon-background-tint
+                            (flyover--tint-color
+                             fg-color
+                             flyover-icon-background-tint
+                             flyover-icon-background-tint-percent)
+                          fg-color))
+         ;; Text tinting
          (tinted-fg (if flyover-text-tint
                         (flyover--tint-color
                          fg-color
                          flyover-text-tint
                          flyover-text-tint-percent)
                       fg-color))
+         ;; Icon tinting (separate control)
+         (icon-fg (if flyover-icon-tint
+                      (flyover--tint-color
+                       fg-color
+                       flyover-icon-tint
+                       flyover-icon-tint-percent)
+                    fg-color))
          (face-with-colors `(:inherit ,face
                                       :foreground ,tinted-fg
                                       :background ,bg-color))
-         (indicator (flyover--get-indicator face tinted-fg))
+         (indicator (flyover--get-indicator face icon-fg))
          (virtual-line (when flyover-show-virtual-line
                          (propertize (flyover-get-arrow)
                                      'face `(:foreground ,fg-color))))
@@ -1532,17 +1577,39 @@ Lower LIGHTNESS values create darker backgrounds."
 
 (defun flyover--get-face-colors (level)
   "Get foreground and background colors for error LEVEL.
-Uses theme colors when `flyover-use-theme-colors' is non-nil."
-  (let ((fg (pcase level
-              ((or 'error "error") (flyover--get-theme-face-color 'error :foreground "#ea8faa"))
-              ((or 'warning "warning") (flyover--get-theme-face-color 'warning :foreground "#DCA561"))
-              ((or 'info "info") (flyover--get-theme-face-color 'success :foreground "#a8e3a9"))
-              (_ (flyover--get-theme-face-color 'warning :foreground "#DCA561")))))
-    (cons fg (flyover--create-background-from-foreground fg flyover-background-lightness))))
+Uses theme colors when `flyover-use-theme-colors' is non-nil.
+If the flyover face has an explicit :background, both foreground and
+background are taken from the face for full accessibility control."
+  (let* ((face-name (pcase level
+                      ((or 'error "error") 'flyover-error)
+                      ((or 'warning "warning") 'flyover-warning)
+                      ((or 'info "info") 'flyover-info)
+                      (_ 'flyover-warning)))
+         (explicit-bg (face-attribute face-name :background nil t))
+         (explicit-fg (face-attribute face-name :foreground nil t)))
+    (if (and explicit-bg (not (eq explicit-bg 'unspecified)))
+        ;; User has set explicit background - use both fg and bg from face
+        (cons (if (and explicit-fg (not (eq explicit-fg 'unspecified)))
+                  explicit-fg
+                (flyover--get-theme-face-color
+                 (pcase level
+                   ((or 'error "error") 'error)
+                   ((or 'warning "warning") 'warning)
+                   (_ 'success))
+                 :foreground "#DCA561"))
+              explicit-bg)
+      ;; No explicit background - use current computed behavior
+      (let ((fg (pcase level
+                  ((or 'error "error") (flyover--get-theme-face-color 'error :foreground "#ea8faa"))
+                  ((or 'warning "warning") (flyover--get-theme-face-color 'warning :foreground "#DCA561"))
+                  ((or 'info "info") (flyover--get-theme-face-color 'success :foreground "#a8e3a9"))
+                  (_ (flyover--get-theme-face-color 'warning :foreground "#DCA561")))))
+        (cons fg (flyover--create-background-from-foreground fg flyover-background-lightness))))))
 
 (defun flyover--tint-color (color tint percent)
   "Tint COLOR according to TINT type and PERCENT amount.
-TINT should be either =\'lighter or =\'darker."
+TINT should be \\='lighter or \\='darker.
+PERCENT controls how much to tint (0 = no change, 100 = full white/black)."
   (pcase tint
     ('lighter
      (let* ((rgb (flyover--color-to-rgb color))
@@ -1552,7 +1619,13 @@ TINT should be either =\'lighter or =\'darker."
                                rgb)))
        (apply #'flyover--rgb-to-hex lightened)))
     ('darker
-     (flyover--darken-color color percent))
+     ;; Symmetric with lighter: move toward 0 (black) by percent amount
+     (let* ((rgb (flyover--color-to-rgb color))
+            (darkened (mapcar (lambda (component)
+                                (max 0
+                                     (floor (- component (* component (/ percent 100.0))))))
+                              rgb)))
+       (apply #'flyover--rgb-to-hex darkened)))
     (_ color)))
 
 (defun flyover-toggle ()
