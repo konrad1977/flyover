@@ -379,6 +379,10 @@ You can customize the border style of the overlay message box. Built-in styles r
 | `flames` | `` | `` | Flame style |
 | `pixels` | `` | `` | Pixelated style |
 
+<p align="center">
+  <img src="https://github.com/konrad1977/flycheck-overlay/blob/main/screenshots/borders.png" alt="Border styles"/>
+</p>
+
 #### Custom Styles
 
 You can define custom border styles by adding entries to `flyover-border-chars`:
@@ -397,11 +401,6 @@ You can define custom border styles by adding entries to `flyover-border-chars`:
 (add-to-list 'flyover-border-chars '(brackets . ("[" . "]")))
 (setq flyover-border-style 'brackets)
 ```
-
-<p align="center">
-  <img src="https://github.com/konrad1977/flycheck-overlay/blob/main/screenshots/border_pill.png" alt="Pill border style"/>
-  <img src="https://github.com/konrad1977/flycheck-overlay/blob/main/screenshots/border_arrow.png" alt="Arrow border style"/>
-</p>
 
 ### Show under or after the faulty code
 
