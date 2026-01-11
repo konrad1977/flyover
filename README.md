@@ -78,7 +78,10 @@ A modern, aesthetic overlay display for *Flycheck* and *Flymake* in Emacs. Flyov
   (flyover-cursor-debounce-interval 0.3)
 
   ;; Display mode (controls cursor-based visibility)
-  (flyover-display-mode 'always))
+  (flyover-display-mode 'always)
+
+  ;; Completion integration
+  (flyover-hide-during-completion t))
 ```
 
 ### Manual Installation
@@ -343,6 +346,20 @@ Control when overlays are shown based on cursor position using `flyover-display-
 <p align="center">
   <img src="https://github.com/konrad1977/flycheck-overlay/blob/main/screenshots/flycheck_hide_overlay_cursor.gif" alt="Gif of showing hide cursor is on same line"/>
 </p>
+
+### Completion Integration
+
+Flyover automatically hides overlays when completion popups are active, preventing visual conflicts with corfu, company, eglot, cape, and other completion systems.
+
+```elisp
+;; Hide overlays during completion (default: t)
+(setq flyover-hide-during-completion t)
+
+;; Disable if you prefer overlays to remain visible during completion
+(setq flyover-hide-during-completion nil)
+```
+
+This feature uses `completion-in-region-mode` (the standard Emacs completion mechanism) to detect when completion is active, ensuring compatibility with modern completion UIs. Company-mode is also supported via its own detection.
 
 ### Show or hide checker name
 

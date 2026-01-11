@@ -1,7 +1,7 @@
 ;;; flyover.el --- Display Flycheck and Flymake errors with overlays -*- lexical-binding: t -*-
 
 ;; Author: Mikael Konradsson <mikael.konradsson@outlook.com>
-;; Version: 0.9.8
+;; Version: 0.9.9
 ;; Package-Requires: ((emacs "27.1") (flymake "1.0"))
 ;; Keywords: convenience, tools, flycheck, flymake
 ;; URL: https://github.com/konrad1977/flyover
@@ -221,6 +221,14 @@ Lower values make backgrounds darker."
   :type 'boolean
   :group 'flyover)
 
+(defcustom flyover-hide-during-completion t
+  "Hide flyover overlays when completion popup is active.
+When non-nil, flyover overlays are temporarily hidden while
+completion candidates are displayed (corfu, company, etc.).
+This prevents visual conflicts between the overlay and completion popup."
+  :type 'boolean
+  :group 'flyover)
+
 (defcustom flyover-display-mode 'always
   "Control when to display error overlays based on cursor position.
 
@@ -415,6 +423,9 @@ Used to avoid unnecessary overlay rebuilds in cursor-dependent modes.")
 (defvar-local flyover--cursor-debounce-timer nil
   "Timer used for debouncing cursor movement updates.
 Separate from `flyover--debounce-timer' to allow different intervals.")
+
+(defvar-local flyover--hidden-for-completion nil
+  "Non-nil when overlays are hidden due to active completion.")
 
 ;; Color cache for performance optimization
 (defvar flyover--color-cache (make-hash-table :test 'equal)
@@ -1329,6 +1340,12 @@ STATUS is the new flycheck status."
                                      hide-at-exact-position))
     (flyover--safe-add-hook 'post-command-hook
                             #'flyover--cursor-display-debounced))
+  ;; Add completion detection hook when hide-during-completion is enabled
+  (when flyover-hide-during-completion
+    (when flyover-debug
+      (message "DEBUG enable: adding completion detection hook"))
+    (flyover--safe-add-hook 'post-command-hook
+                            #'flyover--check-completion-state))
   ;; Disable auto-window-vscroll to prevent scroll issues with overlays
   (setq-local auto-window-vscroll nil)
   ;; Force initial display of existing errors
@@ -1343,8 +1360,9 @@ STATUS is the new flycheck status."
   (when flyover--cursor-debounce-timer
     (cancel-timer flyover--cursor-debounce-timer)
     (setq flyover--cursor-debounce-timer nil))
-  ;; Reset cursor tracking
+  ;; Reset cursor tracking and completion state
   (setq flyover--last-cursor-line nil)
+  (setq flyover--hidden-for-completion nil)
   ;; Only remove flycheck hooks if flycheck is available
   (when (and (memq 'flycheck flyover-checkers)
              (featurep 'flycheck))
@@ -1357,27 +1375,43 @@ STATUS is the new flycheck status."
 
   (flyover--safe-remove-hook 'after-change-functions
                                       #'flyover--handle-buffer-changes)
-  ;; Remove post-command-hook (try both debounce functions for safety)
+  ;; Remove post-command-hook (try all functions for safety)
   (flyover--safe-remove-hook 'post-command-hook
                               #'flyover--cursor-display-debounced)
   (flyover--safe-remove-hook 'post-command-hook
                               #'flyover--maybe-display-errors-debounced)
+  (flyover--safe-remove-hook 'post-command-hook
+                              #'flyover--check-completion-state)
   (flyover--clear-overlays))
 
 (defun flyover--maybe-display-errors ()
   "Display errors based on cursor position and settings."
   ;; Migrate old settings if needed
   (flyover--migrate-display-settings)
-  ;; Only skip display if buffer is modified AND we're in a position-dependent mode
-  ;; For 'always mode, we should display even when buffer is modified
-  (unless (and (buffer-modified-p)
-               (memq flyover-display-mode '(show-only-on-same-line
-                                            hide-on-same-line
-                                            hide-at-exact-position)))
-    (let ((current-line (line-number-at-pos))
-          (current-col (current-column))
-          (to-delete))
-      (pcase flyover-display-mode
+  ;; Handle completion hiding
+  (let ((completion-active (and flyover-hide-during-completion
+                                (flyover--completion-active-p))))
+    (cond
+     ;; Completion is active - hide overlays and skip display
+     (completion-active
+      (when flyover-debug
+        (message "DEBUG maybe-display-errors: skipping due to active completion"))
+      (flyover--hide-overlays-for-completion))
+     ;; Completion just ended - restore overlays
+     (flyover--hidden-for-completion
+      (flyover--show-overlays-after-completion))
+     ;; Normal case - display errors
+     (t
+      ;; Only skip display if buffer is modified AND we're in a position-dependent mode
+      ;; For 'always mode, we should display even when buffer is modified
+      (unless (and (buffer-modified-p)
+                   (memq flyover-display-mode '(show-only-on-same-line
+                                                hide-on-same-line
+                                                hide-at-exact-position)))
+        (let ((current-line (line-number-at-pos))
+              (current-col (current-column))
+              (to-delete))
+          (pcase flyover-display-mode
         ;; Show only errors on the current line
         ('show-only-on-same-line
          ;; Only rebuild overlays if cursor moved to a different line
@@ -1436,7 +1470,7 @@ STATUS is the new flycheck status."
          ;; Delete collected overlays
          (dolist (ov to-delete)
            (delete-overlay ov)
-           (setq flyover--overlays (delq ov flyover--overlays))))))))
+           (setq flyover--overlays (delq ov flyover--overlays))))))))))) ;; close: pcase, let, unless, t-clause, cond, let)
 
 (defun flyover--maybe-display-errors-debounced (&rest _)
   "Debounced version of `flyover--maybe-display-errors'."
@@ -1634,6 +1668,65 @@ PERCENT controls how much to tint (0 = no change, 100 = full white/black)."
   (if flyover-mode
       (flyover-mode -1)
     (flyover-mode 1)))
+
+;;; Completion integration
+
+(defun flyover--completion-active-p ()
+  "Return non-nil if a completion popup is currently active.
+Uses `completion-in-region-mode' which is the standard mechanism for
+corfu, cape, eglot, and other modern completion systems.
+Also checks for company-mode which uses its own mechanism."
+  (let ((completion-in-region (bound-and-true-p completion-in-region-mode))
+        (company-active (and (bound-and-true-p company-mode)
+                             (bound-and-true-p company-candidates))))
+    (when flyover-debug
+      (message "DEBUG completion-active-p: completion-in-region=%s company=%s"
+               completion-in-region company-active))
+    (or completion-in-region company-active)))
+
+(defun flyover--hide-overlays-for-completion ()
+  "Hide all flyover overlays by making them invisible.
+Stores their visibility state so they can be restored."
+  (unless flyover--hidden-for-completion
+    (when flyover-debug
+      (message "DEBUG hide-overlays: hiding %d overlays" (length flyover--overlays)))
+    (dolist (ov flyover--overlays)
+      (when (overlayp ov)
+        ;; Store original properties and hide
+        (overlay-put ov 'flyover--saved-after-string (overlay-get ov 'after-string))
+        (overlay-put ov 'flyover--saved-display (overlay-get ov 'display))
+        (overlay-put ov 'after-string nil)
+        (overlay-put ov 'display nil)))
+    (setq flyover--hidden-for-completion t)))
+
+(defun flyover--show-overlays-after-completion ()
+  "Restore flyover overlays that were hidden for completion."
+  (when flyover--hidden-for-completion
+    (when flyover-debug
+      (message "DEBUG show-overlays: restoring %d overlays" (length flyover--overlays)))
+    (dolist (ov flyover--overlays)
+      (when (overlayp ov)
+        ;; Restore saved properties
+        (when-let* ((saved-after (overlay-get ov 'flyover--saved-after-string)))
+          (overlay-put ov 'after-string saved-after))
+        (when-let* ((saved-display (overlay-get ov 'flyover--saved-display)))
+          (overlay-put ov 'display saved-display))
+        ;; Clean up saved properties
+        (overlay-put ov 'flyover--saved-after-string nil)
+        (overlay-put ov 'flyover--saved-display nil)))
+    (setq flyover--hidden-for-completion nil)))
+
+(defun flyover--check-completion-state ()
+  "Check completion state and hide/show overlays accordingly.
+Called from `post-command-hook' when `flyover-hide-during-completion' is enabled."
+  (when flyover-hide-during-completion
+    (let ((completion-active (flyover--completion-active-p)))
+      (when flyover-debug
+        (message "DEBUG check-completion-state: active=%s hidden=%s overlays=%d"
+                 completion-active flyover--hidden-for-completion (length flyover--overlays)))
+      (if completion-active
+          (flyover--hide-overlays-for-completion)
+        (flyover--show-overlays-after-completion)))))
 
 (provide 'flyover)
 ;;; flyover.el ends here
