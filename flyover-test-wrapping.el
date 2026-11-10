@@ -15,25 +15,27 @@
 (defun flycheck-overlay--wrap-message (msg max-length)
   "Wrap MSG to multiple lines with each line no longer than MAX-LENGTH.
 Returns a list of strings, each representing a line."
-  (if (not flycheck-overlay-wrap-messages)
-      (list msg)
-    (let ((words (split-string msg " " t))
-          (lines '())
-          (current-line ""))
-      (dolist (word words)
-        (let ((potential-line (if (string-empty-p current-line)
-                                 word
-                               (concat current-line " " word))))
-          (if (<= (length potential-line) max-length)
-              (setq current-line potential-line)
-            ;; Current word would make line too long
-            (when (not (string-empty-p current-line))
-              (push current-line lines))
-            (setq current-line word))))
-      ;; Add the last line if it's not empty
-      (when (not (string-empty-p current-line))
-        (push current-line lines))
-      (nreverse lines))))
+  (let ((lines '())
+        (source-lines (split-string msg "\n" nil)))
+    (dolist (source-line source-lines)
+      (if (not flycheck-overlay-wrap-messages)
+          (push source-line lines)
+        (let ((words (split-string source-line " " t))
+              (current-line ""))
+          (dolist (word words)
+            (let ((potential-line (if (string-empty-p current-line)
+                                      word
+                                    (concat current-line " " word))))
+              (if (<= (length potential-line) max-length)
+                  (setq current-line potential-line)
+                ;; Current word would make line too long
+                (when (not (string-empty-p current-line))
+                  (push current-line lines))
+                (setq current-line word))))
+          ;; Add remaining words of line if it's not empty and reset current-line
+          (when (not (string-empty-p current-line))
+            (push current-line lines)))))
+    (nreverse lines)))
 
 ;; Simple test runner
 (defun test-equal (expected actual test-name)
@@ -84,6 +86,12 @@ Returns a list of strings, each representing a line."
   (test-equal '("Word with multiple" "spaces should wrap")
               (flycheck-overlay--wrap-message "Word    with    multiple    spaces    should    wrap" 20)
               "Multiple spaces handled"))
+
+(let ((flycheck-overlay-wrap-messages t)
+      (flycheck-overlay-max-line-length 20))
+  (test-equal '("Newlines" "should" "be" "wrapped")
+              (flycheck-overlay--wrap-message "Newlines\nshould\nbe\nwrapped" 20)
+              "Newlines handled"))
 
 (message "\nAll tests completed!")
 

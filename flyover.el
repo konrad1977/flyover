@@ -1280,25 +1280,27 @@ Returns the message with ID appended in brackets, e.g., \"message [E001]\"."
 (defun flyover--wrap-message (msg max-length)
   "Wrap MSG to multiple lines with each line no longer than MAX-LENGTH.
 Returns a list of strings, each representing a line."
-  (if (not flyover-wrap-messages)
-      (list msg)
-    (let ((words (split-string msg " " t))
-          (lines '())
-          (current-line ""))
-      (dolist (word words)
-        (let ((potential-line (if (string-empty-p current-line)
-                                 word
-                               (concat current-line " " word))))
-          (if (<= (length potential-line) max-length)
-              (setq current-line potential-line)
-            ;; Current word would make line too long
-            (when (not (string-empty-p current-line))
-              (push current-line lines))
-            (setq current-line word))))
-      ;; Add the last line if it's not empty
-      (when (not (string-empty-p current-line))
-        (push current-line lines))
-      (nreverse lines))))
+  (let ((lines '())
+        (source-lines (split-string msg "\n" nil)))
+    (dolist (source-line source-lines)
+      (if (not flyover-wrap-messages)
+          (push source-line lines)
+        (let ((words (split-string source-line " " t))
+              (current-line ""))
+          (dolist (word words)
+            (let ((potential-line (if (string-empty-p current-line)
+                                      word
+                                    (concat current-line " " word))))
+              (if (<= (length potential-line) max-length)
+                  (setq current-line potential-line)
+                ;; Current word would make line too long
+                (when (not (string-empty-p current-line))
+                  (push current-line lines))
+                (setq current-line word))))
+          ;; Add remaining words of line if it's not empty and reset current-line
+          (when (not (string-empty-p current-line))
+            (push current-line lines)))))
+    (nreverse lines)))
 
 (defun flyover--overlays-match-errors-p (overlays errors)
   "Check if current OVERLAYS match the given ERRORS.
